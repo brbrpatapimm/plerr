@@ -6052,7 +6052,7 @@ for _, key in ipairs({ "__ByteHubOpus", "__GTFarm" }) do -- __GTFarm = nama vers
     G[key] = nil
 end
 local Session = {}
-Session.Build = "2026-11-21-worldmenu-retry-v85"
+Session.Build = "2026-11-21-worldmenu-candidate-v86"
 G.__ByteHubOpus = Session
 local function alive()
     return G.__ByteHubOpus == Session
@@ -6270,18 +6270,50 @@ do
         return entries >= 12 and named / entries >= 0.85 and metadata >= 8 and (seeds > 0 or solids >= 4)
     end
     function Session.isMovementMenu(value)
-        if type(value) ~= "table" or type(rawget(value, "isDown")) ~= "function" then
-            return false
+        -- isDown adalah kontrak minimum yang dipakai ByteHub untuk membaca
+        -- tombol gerak. Metadata visual/menu tidak wajib tersedia di semua client.
+        return type(value) == "table"
+            and type(rawget(value, "isDown")) == "function"
+    end
+
+    function Session.chooseMovementCandidate(match)
+        if type(match) ~= "table" then return nil end
+        if not match.Ambiguous then
+            local value = match.Value
+            if Session.isMovementMenu(value) then return value, match.Object end
+            return nil
         end
 
-        -- Client dapat mengganti nama atau susunan metadata WorldMenu.
-        local keys = rawget(value, "KEYS") or rawget(value, "keys") or rawget(value, "keyMap")
-        if type(keys) == "table" and next(keys) ~= nil then return true end
+        local winner, winnerObject, bestScore, tied = nil, nil, -1, false
+        for _, candidate in ipairs(match.Candidates or {}) do
+            local value = candidate.Value
+            if Session.isMovementMenu(value) then
+                local score = 1
+                local object = candidate.Object
+                if object then
+                    if object.Name == "WorldMenu" then score += 100 end
+                    local okName, fullName = pcall(function() return object:GetFullName() end)
+                    if okName and type(fullName) == "string" then
+                        if fullName:find("GameGui", 1, true) then score += 40 end
+                        if fullName:find("PlayerGui", 1, true) then score += 10 end
+                    end
+                end
+                if type(rawget(value, "mount")) == "function" then score += 15 end
+                if type(rawget(value, "KEYS") or rawget(value, "keys") or rawget(value, "keyMap")) == "table" then
+                    score += 10
+                end
+                if type(rawget(value, "SKINS") or rawget(value, "skins")) == "table" then score += 5 end
 
-        local mount = rawget(value, "mount")
-        local skins = rawget(value, "SKINS") or rawget(value, "skins")
-        local defaultSkin = rawget(value, "DEFAULT_SKIN") or rawget(value, "defaultSkin")
-        return type(mount) == "function" or type(skins) == "table" or defaultSkin ~= nil
+                if score > bestScore then
+                    winner, winnerObject, bestScore, tied = value, object, score, false
+                elseif score == bestScore then
+                    tied = true
+                end
+            end
+        end
+
+        if winner and not tied then return winner, winnerObject end
+        return nil
     end
 
     local function matches(name, value)
@@ -6609,7 +6641,11 @@ do
         scanFiltered()
         local filtered = filteredMatches[name]
         if filtered then
-            if not filtered.Ambiguous then return filtered.Value end
+            if not filtered.Ambiguous then return filtered.Value, filtered.Object end
+            if name == "WorldMenu" then
+                local selected, selectedObject = Session.chooseMovementCandidate(filtered)
+                if selected then return selected, selectedObject end
+            end
             if name == "ItemDB" then
                 local resolved = resolveDatabase(filtered)
                 if resolved then return resolved.Value end
@@ -6619,7 +6655,13 @@ do
         end
         scanRuntime(retry)
         local found = runtimeMatches[name]
-        if runtimeComplete and found and not found.Ambiguous then return found.Value, found.Object end
+        if runtimeComplete and found then
+            if not found.Ambiguous then return found.Value, found.Object end
+            if name == "WorldMenu" then
+                local selected, selectedObject = Session.chooseMovementCandidate(found)
+                if selected then return selected, selectedObject end
+            end
+        end
         if runtimeComplete and found and name == "ItemDB" then
             local resolved = resolveDatabase(found)
             if resolved then
@@ -6634,6 +6676,10 @@ do
         scanLoaded()
         found = exportMatches[name]
         if exportsComplete and found then
+            if found.Ambiguous and name == "WorldMenu" then
+                local selected, selectedObject = Session.chooseMovementCandidate(found)
+                if selected then return selected, selectedObject end
+            end
             if found.Ambiguous and name == "ItemDB" then
                 local resolved = resolveDatabase(found)
                 if resolved then return resolved.Value, resolved.Object end
@@ -6715,6 +6761,13 @@ do
         -- tersedia setelah startup awal.
         moduleDeadline = os.clock() + 4
         local value, moduleObject = structuralModule("WorldMenu", true)
+        if not value then
+            local selected, selectedObject
+            selected, selectedObject = Session.chooseMovementCandidate(filteredMatches.WorldMenu)
+            if not selected then selected, selectedObject = Session.chooseMovementCandidate(runtimeMatches.WorldMenu) end
+            if not selected then selected, selectedObject = Session.chooseMovementCandidate(exportMatches.WorldMenu) end
+            value, moduleObject = selected, selectedObject
+        end
         if type(value) == "table" and type(rawget(value, "isDown")) == "function" then
             MenuModOk, MenuModule = true, value
             local sourceName = "runtime:WorldMenu"
@@ -6728,9 +6781,16 @@ do
             return true
         end
 
-        if not Session.ModuleScan.MovementError then
-            Session.ModuleScan.MovementError = "WorldMenu dengan fungsi isDown belum ditemukan"
+        local candidateCount = 0
+        for _, match in ipairs({ filteredMatches.WorldMenu or {}, runtimeMatches.WorldMenu or {}, exportMatches.WorldMenu or {} }) do
+            if type(match.Candidates) == "table" then
+                candidateCount = math.max(candidateCount, #match.Candidates)
+            elseif match.Value then
+                candidateCount = math.max(candidateCount, 1)
+            end
         end
+        Session.ModuleScan.MovementCandidates = candidateCount
+        Session.ModuleScan.MovementError = "WorldMenu.isDown belum teridentifikasi (kandidat=" .. tostring(candidateCount) .. ")"
         return false
     end
 
