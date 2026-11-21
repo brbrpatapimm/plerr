@@ -22520,19 +22520,37 @@ notify("Auto PnB", "Tab Auto PnB siap dipakai.", 4)
 return farmCleanup
 end
 
-executorEnv.__autoFarmCleanup = (function()
-    local ok, result = pcall(executorEnv.__mountAutoFarm, notify, UI)
-    if ok and type(result) == "function" then return result end
-    warn("[AutoFarm] gagal dimuat: " .. tostring(result))
-    return nil
-end)()
-executorEnv.__mountAutoFarm = nil
-
 --// START
+-- Tampilkan shell UI sebelum discovery modul game dijalankan.
+-- Proses discovery berjalan di task terpisah agar tidak menahan UI utama.
 selectTab("Dashboard")
 setOpen(true)
 setAccentIndex(State.accentIndex)
-loadConfig(true)
+notify("BYTEHUB", "UI aktif. Menyiapkan fitur...", 3, true)
+
+task.spawn(function()
+    -- Variabel lokal bootstrap ditempatkan di dalam fungsi ini agar tidak
+    -- menambah local register pada chunk utama yang sudah mendekati batas Luau.
+    local autoFarmMount = executorEnv.__mountAutoFarm
+    executorEnv.__mountAutoFarm = nil
+
+    local ok, result = false, "Bootstrap Auto Farm tidak tersedia."
+    if type(autoFarmMount) == "function" then
+        ok, result = pcall(autoFarmMount, notify, UI)
+    end
+
+    if ok and type(result) == "function" then
+        executorEnv.__autoFarmCleanup = result
+        notify("BYTEHUB", "Komponen Auto Farm selesai dimuat.", 3, true)
+    else
+        executorEnv.__autoFarmCleanup = nil
+        warn("[AutoFarm] gagal dimuat: " .. tostring(result))
+        notify("BYTEHUB", "UI aktif, tetapi sebagian fitur gagal dimuat. Periksa console.", 5, true)
+    end
+
+    -- Config diterapkan setelah kontrol fitur selesai dibuat.
+    pcall(loadConfig, true)
+end)
 --// BYTEHUB AUTO RECONNECT (INTEGRATED)
 ;(function()
     local function startByteHubAutoReconnect()
@@ -22545,7 +22563,7 @@ loadConfig(true)
         end
 
         local Env = getEnvironment()
-        local bridgeDeadline = os.clock() + 35
+        local bridgeDeadline = os.clock() + 60
         local Bridge = Env.__ByteHubReconnectBridge
 
         while type(Bridge) ~= "table" and os.clock() < bridgeDeadline do
