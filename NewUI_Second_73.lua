@@ -823,6 +823,7 @@ local TAB_GROUP_CHILD_ORDER = {
 	["General"] = 2,
 	["Guard"] = 3,
 	["Discord"] = 4,
+	["Auto Reconnect"] = 5,
 }
 local tabGroups = {}
 
@@ -841,7 +842,7 @@ local function ensureTabGroup(name, order)
 	if tabGroups[name] then return tabGroups[name] end
 
 	local headerHeight = 38
-	local childCount = (name == "Setting") and 4 or 3
+	local childCount = (name == "Setting") and 5 or 3
 	local childHeight = childCount * 34 + math.max(0, childCount - 1) * 4 + 6
 	local frame = new("Frame", {
 		Name = "TabGroup_" .. name:gsub("%W", ""),
@@ -1710,6 +1711,12 @@ if player.Character then task.spawn(setupCharacter, player.Character) end
 local pDash = createTab("Dashboard")
 local pUIUX = createTab("UI/UX", "Setting")
 local pGeneral = createTab("General", "Setting")
+local pAutoReconnect = createTab("Auto Reconnect", "Setting")
+UI.Section(pAutoReconnect, "AUTO RECONNECT")
+local pAutoReconnectStatus = UI.Label(
+	pAutoReconnect,
+	"Memuat kontrol Auto Reconnect..."
+)
 
 --------------------------------------------------------------------
 -- DASHBOARD
@@ -2434,7 +2441,7 @@ local function readCanPlaceCoordinates(fn)
     return nil, nil
 end
 
--- API constants mengikuti tab Farm n4th: dukung debug.getconstants dan global getconstants.
+-- API constants mengikuti tab Farm ByteHub: dukung debug.getconstants dan global getconstants.
 local function getConstantSet(fn)
     if type(fn) ~= "function" then return nil end
     local getters = {}
@@ -3265,7 +3272,7 @@ local function findPlantSeedFromRuntime(inventory, world)
     return findPlantSeedForInventory(objects, inventory, world)
 end
 
--- Runtime fallback mengikuti pola referensi n4th: ambil object Inventory yang
+-- Runtime fallback mengikuti pola referensi ByteHub: ambil object Inventory yang
 -- benar-benar hidup dari heap, bukan menolak semua kandidat ketika ada salinan
 -- instance stale lain. ItemDB juga dicari dari tabel runtime dan closure game.
 local runtimeDataScanAt = -math.huge
@@ -3298,7 +3305,7 @@ local function runtimeGameClosure(fn)
         if ok and result then return false end
     end
     for _, source in ipairs(sources) do
-        if source:find("ByteHub", 1, true) or source:find("n4th-main", 1, true)
+        if source:find("ByteHub", 1, true) or source:find("ByteHub-main", 1, true)
             or source == "executor" or source == "[C]" or source == "=[C]" then
             return false
         end
@@ -4114,9 +4121,6 @@ autoToggle = UI.Toggle(pAuto, {
             end
         elseif stopAutoPlant then
             pcall(stopAutoPlant, "Dihentikan dari toggle.")
-            if Session.Rejoin and Session.Rejoin.cancelActivity then
-                pcall(Session.Rejoin.cancelActivity, "plant")
-            end
         end
     end,
 })
@@ -5634,7 +5638,7 @@ startScan = function()
     -- Hanya satu mesin yang boleh jalan: Auto Harvest / Auto Farm dihentikan dulu.
     local hvStop = executorEnv and executorEnv.__harvestStop
     if type(hvStop) == "function" then pcall(hvStop, "Dihentikan karena Auto Plant dimulai") end
-    local farmSession = executorEnv and executorEnv.__n4thOpus
+    local farmSession = executorEnv and executorEnv.__ByteHubOpus
     if farmSession and type(farmSession.stopAllForPlant) == "function" then
         pcall(farmSession.stopAllForPlant)
     end
@@ -5993,21 +5997,21 @@ do (function()
 end)() end
 
 --// ============================================================
---//  AUTO FARM SUITE (diporting dari script_n4th.lua)
+--//  AUTO FARM SUITE (diporting dari script_ByteHub.lua)
 --// ============================================================
 executorEnv.__mountAutoFarm = function(OuterNotify, OuterUI)
 --// --- MESIN bagian 1: util, referensi, downloader ---
 
 local G = (getgenv and getgenv()) or _G
-for _, key in ipairs({ "__n4thOpus", "__GTFarm" }) do -- __GTFarm = nama versi lama
+for _, key in ipairs({ "__ByteHubOpus", "__GTFarm" }) do -- __GTFarm = nama versi lama
     if G[key] and G[key].Cleanup then pcall(G[key].Cleanup) end
     G[key] = nil
 end
 local Session = {}
-Session.Build = "2026-11-19-autorejoin-v73-capability-recovery"
-G.__n4thOpus = Session
+Session.Build = "2026-11-18-autoharvest-obstacle-handling"
+G.__ByteHubOpus = Session
 local function alive()
-    return G.__n4thOpus == Session
+    return G.__ByteHubOpus == Session
 end
 -- Alias executor tetap lokal agar lingkungan game tidak ikut berubah.
 local getgc = getgc or get_gc_objects
@@ -6063,11 +6067,11 @@ function Session.download(url)
             else lastError = tostring(response) end
         end
     end
-    error("[n4th] Unduh gagal: " .. tostring(lastError), 0)
+    error("[ByteHub] Unduh gagal: " .. tostring(lastError), 0)
 end
 task.delay(45, function()
     if alive() and not Session.Ready then
-        warn("[n4th] Masih memuat: " .. tostring(Session.InitStep)
+        warn("[ByteHub] Masih memuat: " .. tostring(Session.InitStep)
             .. ". Kirim baris ini jika menu belum muncul.")
     end
 end)
@@ -6103,12 +6107,12 @@ do
         task.wait(0.1)
         LocalPlayer = Players.LocalPlayer
     end
-    assert(LocalPlayer, "[n4th] LocalPlayer belum tersedia. Masuk ke game lalu execute ulang.")
+    assert(LocalPlayer, "[ByteHub] LocalPlayer belum tersedia. Masuk ke game lalu execute ulang.")
 
     local function requiredChild(parent, name)
         Session.InitStep = parent:GetFullName() .. "/" .. name
         local child = parent:FindFirstChild(name) or parent:WaitForChild(name, 15)
-        assert(child, "[n4th] Tidak menemukan " .. Session.InitStep .. " setelah 15 detik.")
+        assert(child, "[ByteHub] Tidak menemukan " .. Session.InitStep .. " setelah 15 detik.")
         return child
     end
     PlayerGui = requiredChild(LocalPlayer, "PlayerGui")
@@ -6435,7 +6439,7 @@ do
         Session.ItemDBSource = found.Value
         Session.Modules.ItemDB = "runtime:ItemDB"
         Session.ModuleScan.DatabaseResolution = "punch, place, and active world references"
-        print("[n4th] ItemDB resolved from active game references.")
+        print("[ByteHub] ItemDB resolved from active game references.")
         return true
     end
 
@@ -6597,13 +6601,13 @@ do
             end
             reason = ok and "hasil require bukan tabel" or tostring(result)
         end
-        local message = "[n4th] Modul " .. name .. ": " .. (reason or (required and "tidak ditemukan setelah pencarian 30 detik" or "tidak ditemukan"))
+        local message = "[ByteHub] Modul " .. name .. ": " .. (reason or (required and "tidak ditemukan setelah pencarian 30 detik" or "tidak ditemukan"))
         if required then
             Session.BootstrapReport = report()
-            warn("[n4th] Struktur client: " .. Session.BootstrapReport)
-            warn(("[n4th] Pemindaian data: tabel=%d | export=%d | gagal=%d | terakhir=%s"):format(
+            warn("[ByteHub] Struktur client: " .. Session.BootstrapReport)
+            warn(("[ByteHub] Pemindaian data: tabel=%d | export=%d | gagal=%d | terakhir=%s"):format(
                 Session.ModuleScan.Tables, Session.ModuleScan.Loaded, Session.ModuleScan.Errors, tostring(Session.ModuleScan.LastError)))
-            error(message .. ". Jalankan n4th-diagnose.lua untuk membaca struktur client terbaru.", 0)
+            error(message .. ". Jalankan ByteHub-diagnose.lua untuk membaca struktur client terbaru.", 0)
         end
         -- Modul opsional tidak perlu dilaporkan: menunya tetap dimuat.
         return false, nil
@@ -6637,7 +6641,7 @@ do
             if not RolesOk then RolesOk, RolesModule = loadModule(Shared, "Roles", false) end
         end)
         Session.ItemScan = false
-        if not ok then warn("[n4th] ItemDB scan: " .. tostring(reason)) end
+        if not ok then warn("[ByteHub] ItemDB scan: " .. tostring(reason)) end
         return Session.ItemDBSource ~= nil
     end
 
@@ -7124,7 +7128,7 @@ function UI.runJobs()
         if job and now >= job.at then
             UI.Jobs[key] = nil
             local ok, err = pcall(job.fn)
-            if not ok then warn("[n4th] UI job " .. tostring(key) .. ": " .. tostring(err)) end
+            if not ok then warn("[ByteHub] UI job " .. tostring(key) .. ": " .. tostring(err)) end
         end
     end
 end
@@ -7582,7 +7586,7 @@ I18N.EN = {
     ["Isi URL webhook dulu"] = "Fill in the webhook URL first",
     ["Pesan tes masuk antrian"] = "Test message queued",
     ["URL webhook tidak valid"] = "Invalid webhook URL",
-    ["Tes notifikasi dari n4th"] = "Test notification from n4th",
+    ["Tes notifikasi dari ByteHub"] = "Test notification from ByteHub",
     -- pilihan dropdown
     ["Kiri ? Kanan"] = "Left ? Right", ["Semua pemain"] = "All players", ["Semua"] = "All",
     ["Depan"] = "Front", ["Break saja"] = "Break only", ["Place saja"] = "Place only",
@@ -8046,7 +8050,7 @@ do (function() -- scope terpisah agar tidak menambah local utama script
         end
 
         -- Migrasi dari file versi lama jika ByteConfig.json belum tersedia.
-        local legacyAuto = readPath("n4thOpus/config_" .. tostring(LocalPlayer.UserId) .. ".json")
+        local legacyAuto = readPath("ByteHubOpus/config_" .. tostring(LocalPlayer.UserId) .. ".json")
         local legacyUI = readPath("ByteHubConfig2.json")
         if legacyAuto or legacyUI then
             local merged = {}
@@ -8427,7 +8431,7 @@ Config.add("AutoPlant", plantState, { "delay", "mode", "autoTakeSeed", "selected
 if plantState.syncControls then pcall(plantState.syncControls) end
 do
     local teleport = game:GetService("TeleportService")
-    local key = "n4th.language.v1"
+    local key = "ByteHub.language.v1"
     local function valid(lang) return lang == "id" or lang == "en" end
     local saved = Config.Data.Bahasa
     if type(saved) == "table" and valid(saved.Saved) and saved.Chosen == nil then
@@ -8440,7 +8444,7 @@ do
         I18N.Saved, I18N.Chosen, I18N.Ask = preference.Saved, true, preference.Ask == true
     end
     -- Saat Finder memuat script kembali, dialog tidak boleh menahan kelanjutan antrean.
-    local pendingOK, pending = pcall(teleport.GetTeleportSetting, teleport, "n4th.finder.teleport.v1")
+    local pendingOK, pending = pcall(teleport.GetTeleportSetting, teleport, "ByteHub.finder.teleport.v1")
     I18N.TeleportResume = pendingOK and type(pending) == "table" and pending.Active == true
         and pending.Schema == 1 and pending.User == LocalPlayer.UserId and pending.Universe == game.GameId
         and pending.Job ~= game.JobId and type(pending.At) == "number"
@@ -8476,7 +8480,6 @@ local Hook = {
     Stop = true,      -- aktivitas berhenti (block habis, error)
     Full = true,      -- inventori penuh
     Bonus = true,     -- quest diklaim / redeem berhasil
-    Rejoin = true,    -- terlempar / masuk lagi
     Pabrik = true,    -- pabrik drop / lahan selesai / berhenti
     Finder = true,
     ReportMin = 0,    -- laporan statistik tiap X menit (0 = mati)
@@ -8501,15 +8504,15 @@ do (function()
         return false
     end
 
-    -- jenis: "penjaga" | "stop" | "full" | "bonus" | "rejoin" | "report" | "test"
+    -- jenis: "penjaga" | "stop" | "full" | "bonus" | "report" | "test"
     function Hook.send(kind, text)
         -- Pengujian lokal tidak mengirim notifikasi ke Discord; config pengguna tetap utuh.
-        if G.__n4thLiveTest and G.__n4thLiveTest.Running then return end
+        if G.__ByteHubLiveTest and G.__ByteHubLiveTest.Running then return end
         if not Hook.On or not Hook.valid(Hook.Url) then return end
         local allow = kind == "test" or kind == "report"
             or (kind == "penjaga" and Hook.Penjaga) or (kind == "stop" and Hook.Stop)
             or (kind == "full" and Hook.Full) or (kind == "bonus" and Hook.Bonus)
-            or (kind == "rejoin" and Hook.Rejoin) or (kind == "pabrik" and Hook.Pabrik)
+            or (kind == "pabrik" and Hook.Pabrik)
             or (kind == "finder" and Hook.Finder)
         if not allow or #Hook.Queue >= 20 then return end
         table.insert(Hook.Queue, I18N.T(tostring(text)))
@@ -8526,7 +8529,7 @@ do (function()
                     Hook.Status = "Executor tidak punya fungsi request"
                 else
                     local body = HttpService:JSONEncode({
-                        username = "n4th",
+                        username = "ByteHub",
                         content = ("**[%s]** %s"):format(LocalPlayer.Name, text),
                     })
                     local ok, res = pcall(req, {
@@ -8546,7 +8549,7 @@ do (function()
     end)
 end)() end
 
-Config.add("Discord", Hook, { "On", "Url", "Penjaga", "Stop", "Full", "Pabrik", "Rejoin" })
+Config.add("Discord", Hook, { "On", "Url", "Penjaga", "Stop", "Full", "Pabrik" })
 
 ---------------------------------------------------------------------
 -- CARI DATA & FUNGSI GAME (getgc)
@@ -8788,7 +8791,7 @@ local function isGameFn(fn)
         if ok and res then return false end
     end
     for _, src in ipairs(sources) do
-        if src:find("n4th-main", 1, true) or src == "executor" or src == "[C]" or src == "=[C]" then return false end
+        if src:find("ByteHub-main", 1, true) or src == "executor" or src == "[C]" or src == "=[C]" then return false end
     end
     return true
 end
@@ -9272,7 +9275,7 @@ local function sendSetTile(layer, x, y, id)
                 State.LastSetTileErr = tostring(err)
             end
         end
-        warn("[n4th] setTile game gagal, pakai remote langsung: " .. tostring(State.LastSetTileErr))
+        warn("[ByteHub] setTile game gagal, pakai remote langsung: " .. tostring(State.LastSetTileErr))
     end
     local grid = Refs.World and Refs.World[layer]
     if NetOk and type(Net) == "table" and type(Net.tile) == "table" then
@@ -9834,7 +9837,7 @@ function Drops.remoteTick(list, s)
                     d.autoTakeScheduled = nil
                     if not ok and os.clock() - (Drops.LastTakeErrorAt or -10) >= 10 then
                         Drops.LastTakeErrorAt = os.clock()
-                        warn("[n4th] Auto Collect takeDrop: " .. tostring(err))
+                        warn("[ByteHub] Auto Collect takeDrop: " .. tostring(err))
                     end
                 end)
                 scheduled += 1
@@ -9905,7 +9908,7 @@ task.spawn(function()
         local ok, err = pcall(collectTick)
         if not ok and os.clock() - (Drops.LastErrorAt or -10) >= 10 then
             Drops.LastErrorAt = os.clock()
-            warn("[n4th] Collect: " .. tostring(err))
+            warn("[ByteHub] Collect: " .. tostring(err))
         end
         task.wait(0.05)
     end
@@ -10181,9 +10184,6 @@ local function farmLoop(runId)
             stopFarm("Karakter tidak ditemukan (keluar world?)")
             return
         end
-        if Session.Rejoin and Session.Rejoin.updatePnBCheckpoint then
-            pcall(Session.Rejoin.updatePnBCheckpoint, px, py, false)
-        end
         -- Anchor farm selalu mengikuti tile Auto Farm TERAKHIR yang sedang dikerjakan.
         -- Jangan perbarui saat Supply sedang mengambil drop atau masih punya perjalanan pulang.
         if not Supply.Busy and not Supply.ReturnX and not State.DropPause then
@@ -10341,9 +10341,6 @@ function UI.RefillLoop(runId)
             stopFarm("Karakter tidak ditemukan (keluar world?)")
             return
         end
-        if Session.Rejoin and Session.Rejoin.updatePnBCheckpoint then
-            pcall(Session.Rejoin.updatePnBCheckpoint, px, py, false)
-        end
         -- Sama seperti farmLoop: simpan tile farm terakhir, bukan hanya tile saat start.
         if not Supply.Busy and not Supply.ReturnX and not State.DropPause then
             Supply.HomeX, Supply.HomeY, Supply.HomeWorld = px, py, Guard.worldName()
@@ -10455,36 +10452,17 @@ end
 
 local function setRunningVisual()
     if State.Override then return end -- dijalankan Pabrik: tombol Auto Farm tidak diubah
-    local active = State.Running or State.RejoinPending
-    if UI.FarmToggle then pcall(function() UI.FarmToggle:Set(active, true) end) end
+    if UI.FarmToggle then pcall(function() UI.FarmToggle:Set(State.Running, true) end) end
     if UI.GridSync then pcall(UI.GridSync) end
 end
 
 stopFarm = function(reason)
-    local rejoin = Session.Rejoin
-    local worldExit = type(reason) == "string"
-        and reason:find("Karakter tidak ditemukan", 1, true) ~= nil
-    local keepCheckpoint = rejoin and rejoin.On == true
-        and (rejoin.Pausing == true or worldExit)
-        and type(rejoin.PnBCheckpoint) == "table"
-
-    if not keepCheckpoint and rejoin and rejoin.cancelActivity then
-        pcall(rejoin.cancelActivity, "farm")
-    end
-
     State.Running = false
-    if worldExit and keepCheckpoint then
-        State.RejoinPending = true
-    end
     Supply.Need = false
     setRunningVisual()
     if reason and not State.Quiet then
-        if worldExit and keepCheckpoint then
-            notify("Auto PnB", "Karakter keluar dari world. Menunggu Auto Rejoin...", 4)
-        else
-            notify("Auto Farm berhenti", reason, 4)
-            Hook.send("stop", "Auto Farm berhenti: " .. reason)
-        end
+        notify("Auto Farm berhenti", reason, 4)
+        Hook.send("stop", "Auto Farm berhenti: " .. reason)
     end
     updateStatus()
 end
@@ -10521,13 +10499,8 @@ local function startFarm()
     Supply.HomeWorld = ""
     Supply.HomeX, Supply.HomeY = -1, -1
     Supply.ReturnX, Supply.ReturnY, Supply.ReturnTries = nil, nil, nil
-    State.RejoinPending = false
     State.Running = true
     State.RunId = (State.RunId or 0) + 1
-    if Session.Rejoin and Session.Rejoin.updatePnBCheckpoint then
-        local initialX, initialY = getPlayerTile()
-        pcall(Session.Rejoin.updatePnBCheckpoint, initialX, initialY, true)
-    end
     setRunningVisual()
     updateStatus()
     if farmMode() == "Place + Break (instan refill)" then
@@ -11157,7 +11130,7 @@ local function frame()
         local ok, err = pcall(Harvest.MoveTick)
         if not ok and os.clock() - (Harvest.MoveTickErrorAt or -10) >= 10 then
             Harvest.MoveTickErrorAt = os.clock()
-            warn("[n4th] Auto Harvest move tick: " .. tostring(err))
+            warn("[ByteHub] Auto Harvest move tick: " .. tostring(err))
         end
     end
     if Move.HomingRoute and not Move.HomingRoute.safe(playerState()) then
@@ -12422,7 +12395,7 @@ local function startClear(targetId)
     task.spawn(function()
         local ok, e = pcall(clearLoop)
         if not ok then
-            warn("[n4th] Auto Clear error: " .. tostring(e))
+            warn("[ByteHub] Auto Clear error: " .. tostring(e))
             if Clear.Running then stopClear("Error: " .. tostring(e)) end
         end
     end)
@@ -13231,7 +13204,7 @@ local function startSpliceRoam()
     task.spawn(function()
         local ok, e = pcall(spliceRoamLoop, id)
         if not ok then
-            warn("[n4th] Splice error: " .. tostring(e))
+            warn("[ByteHub] Splice error: " .. tostring(e))
             if Splice.Running and Splice.stop then Splice.stop("Error: " .. tostring(e)) end
         end
     end)
@@ -13631,7 +13604,7 @@ local function pabrikBreak(o)
     end)
     Pabrik.Status = "Break " .. itemName(o.block) .. " di posisi pabrik"
     local ok, e = pcall(farmLoop, id)
-    if not ok then warn("[n4th] Pabrik break error: " .. tostring(e)) end
+    if not ok then warn("[ByteHub] Pabrik break error: " .. tostring(e)) end
     State.Running = false
     State.Override = nil
     State.Quiet = false
@@ -14130,7 +14103,7 @@ do
         Move.Homing, Move.HomingLive, Move.HomingRoute = false, nil, nil
         releaseInput()
         autoEnd()
-        if not okP then warn("[n4th] Auto Take Block: " .. tostring(err)) end
+        if not okP then warn("[ByteHub] Auto Take Block: " .. tostring(err)) end
 
         local returned = false
         if live() then
@@ -14239,7 +14212,7 @@ do
             Supply.BlockCollectUntil = math.max(Supply.BlockCollectUntil or 0, os.clock() + 3)
         end)
         releaseInput()
-        if not okP then warn("[n4th] Auto Drop Seed: " .. tostring(err)) end
+        if not okP then warn("[ByteHub] Auto Drop Seed: " .. tostring(err)) end
         if live() then returnHome(live) end
         State.DropPause = false
         Supply.Busy = false
@@ -14329,7 +14302,7 @@ task.spawn(function()
         local ok, err = pcall(Supply.tick)
         if not ok and os.clock() - (Supply.LastErrorAt or -10) >= 10 then
             Supply.LastErrorAt = os.clock()
-            warn("[n4th] Auto Supply: " .. tostring(err))
+            warn("[ByteHub] Auto Supply: " .. tostring(err))
         end
         task.wait() -- tiap frame: begitu pulang ke anchor, Auto Farm langsung lanjut
     end
@@ -14614,7 +14587,7 @@ do
                 if not ok then
                     AutoDrop.Status = tostring(err)
                     AutoDrop.NextTry = os.clock() + 10
-                    warn("[n4th] Auto Drop: " .. tostring(err))
+                    warn("[ByteHub] Auto Drop: " .. tostring(err))
                 end
             end
         end
@@ -14872,7 +14845,7 @@ function Pabrik.start()
     task.spawn(function()
         local ok, e = pcall(pabrikLoop, id)
         if not ok then
-            warn("[n4th] Pabrik error: " .. tostring(e))
+            warn("[ByteHub] Pabrik error: " .. tostring(e))
             if Pabrik.Running then Pabrik.stop("Error: " .. tostring(e)) end
         end
     end)
@@ -15576,7 +15549,7 @@ function Vend.start()
     task.spawn(function()
         local ok, e = pcall(vendLoop, id)
         if not ok then
-            warn("[n4th] Vending error: " .. tostring(e))
+            warn("[ByteHub] Vending error: " .. tostring(e))
             if Vend.Running then Vend.stop("Error: " .. tostring(e)) end
         end
     end)
@@ -16161,7 +16134,7 @@ function Build.breakSession(o)
     end)
     Build.Status = ("Break %s di posisi break lahan (%d,%d)"):format(itemName(o.block), Build.BreakX, Build.BreakY)
     local ok, e = pcall(farmLoop, id)
-    if not ok then warn("[n4th] Break lahan error: " .. tostring(e)) end
+    if not ok then warn("[ByteHub] Break lahan error: " .. tostring(e)) end
     State.Running = false
     State.Override = nil
     State.Quiet = false
@@ -16539,7 +16512,7 @@ function Build.start()
     task.spawn(function()
         local ok, e = pcall(buildLoop, id)
         if not ok then
-            warn("[n4th] Bangun Lahan error: " .. tostring(e))
+            warn("[ByteHub] Bangun Lahan error: " .. tostring(e))
             if Build.Running then Build.stop("Error: " .. tostring(e)) end
         end
     end)
@@ -16807,9 +16780,9 @@ local function hvsRetryTreeRefs(runId, forceRetry)
             local heapOk, heapFound = pcall(hvsFindTreesInHeap, worldAtStart)
             if heapOk and heapFound then
                 ok, found = true, true
-                warn("[n4th] Auto Harvest: tree timestamp table ditemukan melalui heap scan.")
+                warn("[ByteHub] Auto Harvest: tree timestamp table ditemukan melalui heap scan.")
             elseif not heapOk then
-                warn("[n4th] Auto Harvest heap scan gagal: " .. tostring(heapFound))
+                warn("[ByteHub] Auto Harvest heap scan gagal: " .. tostring(heapFound))
             end
         end
 
@@ -16876,7 +16849,7 @@ local function hvsHookPickup()
     if type(hookfunction) ~= "function" then
         if not Hvs.PickupHookWarned then
             Hvs.PickupHookWarned = true
-            warn("[n4th] hookfunction tidak tersedia: pickup fisik hasil Auto Drop tidak bisa diblokir")
+            warn("[ByteHub] hookfunction tidak tersedia: pickup fisik hasil Auto Drop tidak bisa diblokir")
         end
         return false
     end
@@ -16890,7 +16863,7 @@ local function hvsHookPickup()
     if not ok or type(res) ~= "function" then
         if not Hvs.PickupHookWarned then
             Hvs.PickupHookWarned = true
-            warn("[n4th] hook takeDrop gagal: " .. tostring(res))
+            warn("[ByteHub] hook takeDrop gagal: " .. tostring(res))
         end
         return false
     end
@@ -17851,7 +17824,7 @@ local function hvsWorkInReach(s, retryTarget)
     if not ok then
         if os.clock() - (Hvs.LastHarvestErrorAt or -10) >= 5 then
             Hvs.LastHarvestErrorAt = os.clock()
-            warn("[n4th] Auto Harvest action: " .. tostring(result))
+            warn("[ByteHub] Auto Harvest action: " .. tostring(result))
         end
         skipTile(Hvs.Skip, t.idx, 1)
         Hvs.PendingTarget = nil
@@ -17901,7 +17874,7 @@ local function hvsRunWork(s, retryTarget)
     if not ok then
         if os.clock() - (Hvs.LastWorkerErrorAt or -10) >= 10 then
             Hvs.LastWorkerErrorAt = os.clock()
-            warn("[n4th] Auto Harvest worker: " .. tostring(harvested))
+            warn("[ByteHub] Auto Harvest worker: " .. tostring(harvested))
         end
         return 0
     end
@@ -18415,7 +18388,7 @@ local function hvsLoop(runId)
                         local errText = tostring(ok)
                         Hvs.DropError = errText
                         Hvs.DropStatus = "Error saat Auto Drop; memulihkan posisi"
-                        warn("[n4th] Auto Harvest drop transaction: " .. errText)
+                        warn("[ByteHub] Auto Harvest drop transaction: " .. errText)
                     elseif not ok then
                         if why then Hvs.DropStatus = why end
                     else
@@ -18797,7 +18770,7 @@ function Hvs.start()
     local id = Hvs.RunId
     task.spawn(function()
         local ok, e = pcall(hvsLoop, id)
-        if not ok then warn("[n4th] Auto Harvest error: " .. tostring(e)) end
+        if not ok then warn("[ByteHub] Auto Harvest error: " .. tostring(e)) end
         Hvs.WorkerActive = false
         if Hvs.RunId == id and Hvs.Running then
             Hvs.stop(not ok and "Error Auto Harvest" or nil)
@@ -19194,7 +19167,7 @@ local function plantFetchSeedDrops(seedId, live)
     autoEnd()
     releaseInput()
     endPlantMove(moveEpoch, wasActive)
-    if not okP then warn("[n4th] Auto Plant ambil seed: " .. tostring(err)) end
+    if not okP then warn("[ByteHub] Auto Plant ambil seed: " .. tostring(err)) end
     return math.max(0, invCount(seedId) - initialStock)
 end
 
@@ -19331,7 +19304,7 @@ task.spawn(function()
 end)
 
 ---------------------------------------------------------------------
--- WATERMARK NAMA n4th (hanya di layar sendiri)
+-- WATERMARK NAMA ByteHub (hanya di layar sendiri)
 ---------------------------------------------------------------------
 -- Nama asli (huruf gambar "BitmapText") disembunyikan, diganti teks lokal.
 -- RGB glitch lokal; ukuran teks tetap stabil. Pemain lain tetap melihat nama asli.
@@ -20144,8 +20117,10 @@ UI.Window = Window
 -- farming suite can add controls to those same pages.
 local UIUXTab = windTab(pUIUX, "UI/UX")
 local GeneralTab = windTab(pGeneral, "General")
+local AutoReconnectTab = windTab(pAutoReconnect, "Auto Reconnect")
 UI.Tabs["UI/UX"] = UIUXTab
 UI.Tabs["General"] = GeneralTab
+UI.Tabs["Auto Reconnect"] = AutoReconnectTab
 
 local Box = {}
 
@@ -20401,27 +20376,18 @@ local function buildFarmGrid(page)
     }, { corner(9), stroke(Theme.Accent, 1, 0.1) })
     attachPressFX(startButton)
     startButton.MouseEnter:Connect(function()
-        if not ((State.Running or State.RejoinPending) and not State.Override) then
+        if not (State.Running and not State.Override) then
             tween(startButton, TI.Fast, { BackgroundColor3 = Theme.Accent:Lerp(Theme.Text, 0.12) })
         end
     end)
     startButton.MouseLeave:Connect(function()
         tween(startButton, TI.Fast, {
-            BackgroundColor3 = ((State.Running or State.RejoinPending) and not State.Override) and Theme.Danger or Theme.Accent,
+            BackgroundColor3 = (State.Running and not State.Override) and Theme.Danger or Theme.Accent,
         })
     end)
     startButton.MouseButton1Click:Connect(function()
         if State.Running and not State.Override then
-            if Session.Rejoin and Session.Rejoin.cancelActivity then
-                Session.Rejoin.cancelActivity("farm")
-            end
             stopFarm()
-        elseif State.RejoinPending then
-            State.RejoinPending = false
-            if Session.Rejoin and Session.Rejoin.cancelActivity then
-                Session.Rejoin.cancelActivity("farm")
-            end
-            if UI.GridSync then UI.GridSync() end
         else
             startFarm()
         end
@@ -20455,7 +20421,7 @@ local function buildFarmGrid(page)
     local lastRunning = nil
     local function sync()
         paintAll(false)
-        local running = (State.Running or State.RejoinPending) and not State.Override
+        local running = State.Running and not State.Override
         if running ~= lastRunning then
             lastRunning = running
             startButton.Text = running and "BERHENTI" or "MULAI"
@@ -20504,7 +20470,7 @@ local function buildFarmGrid(page)
 end
 
 -- Tombol ?/? untuk Fly (muncul saat Fly aktif)
-local FlyPad = newScreenGui("n4thFlyPad")
+local FlyPad = newScreenGui("ByteHubFlyPad")
 UI.FlyPad = FlyPad
 
 local function flyButton(text, yOffset, onHold)
@@ -20686,23 +20652,16 @@ do (function() -- fungsi sendiri: variabel di dalam tidak ikut batas 200 local
         if WorldFinder.Busy and WorldFinder.Saved then return WorldFinder.Saved end
         if AutoDrop.Busy and AutoDrop.Saved then return AutoDrop.Saved end
         local tx, ty = Auto.here()
-        local pnbX, pnbY, pnbGridX, pnbGridY
-        local rejoin = Session.Rejoin
-        local checkpoint = rejoin and rejoin.PnBCheckpoint
-        if State.Running and not State.Override then
-            if type(checkpoint) == "table" and checkpoint.world == worldName() then
-                pnbX, pnbY = checkpoint.walkX, checkpoint.walkY
-                pnbGridX, pnbGridY = checkpoint.gridX, checkpoint.gridY
-            elseif type(tx) == "number" and type(ty) == "number" then
-                pnbX, pnbY = tx, ty
-            end
+        local pnbX, pnbY
+        if State.Running and not State.Override
+            and type(tx) == "number" and type(ty) == "number" then
+            pnbX, pnbY = tx, ty
         end
         return {
             plant = plantState.running,
             plantSeedId = plantState.runSeedId or (selectedSeed and selectedSeed.Id),
             farm = State.Running and not State.Override,
             pnbX = pnbX, pnbY = pnbY,
-            pnbGridX = pnbGridX, pnbGridY = pnbGridY,
             clear = Clear.Running,
             clearTarget = Clear.TargetId,
             spam = Spam.On, splice = Splice.Running, pabrik = Pabrik.Running, build = Build.Running, vend = Vend.Running,
@@ -20902,13 +20861,9 @@ do (function() -- fungsi sendiri: variabel di dalam tidak ikut batas 200 local
                             task.wait(0.75)
                         end
                     end
-                    if started then
-                        if Session.Rejoin and Session.Rejoin.clearPending then
-                            Session.Rejoin.clearPending("plant")
-                        end
-                    else
+                    if not started then
                         if autoToggle then autoToggle:Set(true, true) end
-                        notify("Penjaga", "Auto Plant belum berhasil aktif setelah world dimuat. Periksa seed dan game hooks.", 6)
+                        notify("Penjaga", "Auto Plant belum berhasil aktif setelah Guard kembali ke world. Periksa seed dan game hooks.", 6)
                     end
                 elseif active() then
                     if autoToggle then autoToggle:Set(true, true) end
@@ -20925,7 +20880,7 @@ do (function() -- fungsi sendiri: variabel di dalam tidak ikut batas 200 local
             if active() then
                 local workerReady = waitWorkerIdle("harvest", 30)
                 if not workerReady and active() and Harvest.stop then
-                    pcall(Harvest.stop, "Dibatalkan untuk pemulihan setelah rejoin")
+                    pcall(Harvest.stop, "Dibatalkan untuk pemulihan setelah Guard kembali ke world")
                     workerReady = waitWorkerIdle("harvest", 15)
                 end
                 if not active() then return end
@@ -20953,24 +20908,19 @@ do (function() -- fungsi sendiri: variabel di dalam tidak ikut batas 200 local
 
                 if started then
                     if UI.HarvestToggle then UI.HarvestToggle:Set(true, true) end
-                    if Session.Rejoin and Session.Rejoin.clearPending then
-                        Session.Rejoin.clearPending("harvest")
-                    end
                 else
                     if UI.HarvestToggle then UI.HarvestToggle:Set(true, true) end
-                    notify("Penjaga", "Auto Harvest belum berhasil aktif setelah world dimuat: " .. tostring(lastError or "worker belum aktif"), 6)
+                    notify("Penjaga", "Auto Harvest belum berhasil aktif setelah Guard kembali ke world: " .. tostring(lastError or "worker belum aktif"), 6)
                 end
             end
         elseif saved.farm then
-            -- Auto PnB memakai checkpoint koordinat tersendiri.
-            -- Jangan mulai dari spawn jika lokasi terakhir tidak berhasil dicatat.
+            -- Auto PnB dilanjutkan dari posisi terakhir yang tersimpan dalam snapshot Guard.
+            -- Jangan mulai dari spawn jika posisi tersebut tidak berhasil dicatat.
             local targetX = tonumber(saved.pnbX) or tonumber(saved.tx)
             local targetY = tonumber(saved.pnbY) or tonumber(saved.ty)
             if targetX == nil or targetY == nil then
                 if active() then
-                    State.RejoinPending = true
-                    if UI.GridSync then UI.GridSync() end
-                    notify("Auto PnB", "Checkpoint koordinat PnB tidak tersedia. Auto PnB menunggu, tidak dimulai dari spawn.", 6)
+                    notify("Auto PnB", "Posisi terakhir tidak tersedia. Auto PnB tidak dilanjutkan agar tidak dimulai dari spawn.", 6)
                 end
                 return
             end
@@ -20981,22 +20931,15 @@ do (function() -- fungsi sendiri: variabel di dalam tidak ikut batas 200 local
                 if not ok and active() then ok = Auto.walkTo(targetX, targetY, 30) end
                 if not ok then
                     if active() then
-                        State.RejoinPending = true
-                        if UI.GridSync then UI.GridSync() end
-                        notify("Penjaga", "Gagal kembali ke checkpoint PnB. Auto PnB tetap menunggu.", 6)
+                        notify("Penjaga", "Gagal kembali ke posisi PnB terakhir. Auto PnB tidak dilanjutkan.", 6)
                     end
                     return
                 end
             end
             if active() then
                 startFarm()
-                if State.Running then
-                    if Session.Rejoin and Session.Rejoin.clearPending then
-                        Session.Rejoin.clearPending("farm")
-                    end
-                else
-                    State.RejoinPending = true
-                    if UI.GridSync then UI.GridSync() end
+                if not State.Running then
+                    notify("Penjaga", "Auto PnB gagal dilanjutkan setelah Guard kembali ke world.", 6)
                 end
             end
         elseif saved.clear then
@@ -21014,7 +20957,7 @@ do (function() -- fungsi sendiri: variabel di dalam tidak ikut batas 200 local
         Guard.BackText = nil
         task.spawn(function()
             local ok, err = pcall(resumeAll, saved, token)
-            if not ok then warn("[n4th] Penjaga lanjut error: " .. tostring(err)) end
+            if not ok then warn("[ByteHub] Penjaga lanjut error: " .. tostring(err)) end
             if Guard.Token == token and Guard.Mode == "back" then
                 Guard.Mode, Guard.Saved, Guard.BackText = "idle", nil, nil
             end
@@ -21230,7 +21173,114 @@ do (function() -- fungsi sendiri: variabel di dalam tidak ikut batas 200 local
         end
     end
 
-    -- dipakai fitur lain (Auto Reconnect)
+    -- API kecil untuk modul ByteHub Auto Reconnect eksternal.
+    -- Hanya mengekspos operasi yang diperlukan; logic Auto Farm tetap lokal.
+    local reconnectBridge = {
+        Version = 1,
+        Owner = Session,
+        Tab = UI.Tabs["Auto Reconnect"],
+        StatusLabel = pAutoReconnectStatus,
+        notify = function(title, message, duration)
+            if not alive() then return false end
+            notify(title or "Auto Reconnect", message or "", duration or 3)
+            return true
+        end,
+        registerConfig = function(name, tbl, keys, later)
+            if not alive() or type(name) ~= "string" or type(tbl) ~= "table"
+                or type(keys) ~= "table" then
+                return false, "Argumen konfigurasi tidak valid."
+            end
+            Config.add(name, tbl, keys, later)
+            return true
+        end,
+        saveConfig = function(force)
+            if not alive() then return false end
+            return Config.save(force == true)
+        end,
+        autoSaveEnabled = function()
+            return alive() and Config.AutoSave == true
+        end,
+        connectWorldClosed = function(callback)
+            if not alive() or type(callback) ~= "function" then
+                return false, "Callback tidak valid atau sesi ByteHub berhenti."
+            end
+            if NetOk and type(Net) == "table" and type(Net.on) == "function"
+                and type(Net.EVENTS) == "table" and Net.EVENTS.WorldClosed then
+                local ok, result = pcall(Net.on, "WorldClosed", function(message)
+                    if alive() then callback(message) end
+                end, function()
+                    local currentWorld = Refs.World
+                    return currentWorld and rawget(currentWorld, "name") or ""
+                end)
+                if ok and result ~= false then return true, result end
+            end
+            local closedEvent = WorldRemotes and WorldRemotes:FindFirstChild("WorldClosed")
+            if closedEvent and closedEvent:IsA("RemoteEvent") then
+                local connection = closedEvent.OnClientEvent:Connect(function(message)
+                    if alive() then callback(message) end
+                end)
+                return true, connection
+            end
+            return false, "Event WorldClosed belum ditemukan."
+        end,
+        getPlayer = function()
+            return LocalPlayer
+        end,
+        getPlaceId = function()
+            return game.PlaceId
+        end,
+        getGuardMode = function()
+            return Guard.Mode
+        end,
+        isAlive = function()
+            return alive()
+        end,
+        isReady = function()
+            return alive() and Session.Ready == true
+        end,
+        getWorld = function()
+            return worldName()
+        end,
+        hasActivity = function()
+            return anyRunning()
+        end,
+        captureSnapshot = function()
+            if not alive() then return nil, "Session ByteHub tidak aktif." end
+            return snapshot()
+        end,
+        stopActivities = function()
+            if not alive() then return false, "Session ByteHub tidak aktif." end
+            stopAll()
+            return true
+        end,
+        enterWorld = function(name)
+            if not alive() then return false, "Session ByteHub tidak aktif." end
+            return enterWorld(name)
+        end,
+        leaveWorld = function()
+            if not alive() then return false, "Session ByteHub tidak aktif." end
+            return leaveWorld()
+        end,
+        afterWorldEnter = function()
+            if not alive() then return false end
+            Guard.afterEnter()
+            return true
+        end,
+        resumeActivities = function(saved)
+            if not alive() then return false, "Session ByteHub tidak aktif." end
+            if type(saved) ~= "table" then return false, "Recovery snapshot tidak valid." end
+            if saved.world and saved.world ~= ""
+                and tostring(worldName()):upper() ~= tostring(saved.world):upper() then
+                return false, "World aktif tidak cocok dengan snapshot."
+            end
+            Guard.resumeSaved(saved)
+            return true
+        end,
+    }
+
+    executorEnv.__ByteHubReconnectBridge = reconnectBridge
+
+    -- Dipakai fitur lain yang membutuhkan snapshot dan pemulihan aktivitas.
     Guard.snapshot = snapshot
     Guard.resumeActivities = function(saved, live) return resumeAll(saved, nil, live) end
     Guard.stopAll = stopAll
@@ -21263,7 +21313,7 @@ do (function() -- fungsi sendiri: variabel di dalam tidak ikut batas 200 local
         while alive() do
             local here = (Guard.Mode ~= "away" and Guard.Mode ~= "out") and playersHere() or {}
             local ok, err = pcall(Guard.tick, here)
-            if not ok then warn("[n4th] Penjaga error: " .. tostring(err)) end
+            if not ok then warn("[ByteHub] Penjaga error: " .. tostring(err)) end
             Guard.updateStatus(here)
             task.wait(0.5)
         end
@@ -21454,7 +21504,7 @@ do (function()
                 end
                 local wasEnabled = Hook.On
                 Hook.On = true
-                Hook.send("test", "Test notification from n4th")
+                Hook.send("test", "Test notification from ByteHub")
                 Hook.On = wasEnabled
                 notify("Discord", "Pesan percobaan dimasukkan ke antrean.", 3)
             end,
@@ -21465,7 +21515,6 @@ do (function()
         { "Penjaga", "Aktivitas Guard", "Peringatan saat Guard mendeteksi pemain." },
         { "Stop", "Aktivitas Berhenti", "Pemberitahuan ketika aktivitas otomatis berhenti." },
         { "Full", "Inventori Penuh", "Pemberitahuan ketika inventori tidak dapat menerima drop." },
-        { "Rejoin", "Auto Rejoin World", "Pemberitahuan ketika avatar terlempar dan masuk kembali ke world." },
         { "Pabrik", "Pabrik dan Vending", "Pemberitahuan aktivitas pabrik, vending, dan build." },
     }) do
         safe(function()
@@ -21905,9 +21954,6 @@ do (function()
                         if UI.HarvestToggle then pcall(function() UI.HarvestToggle:Set(false) end) end
                     end
                 else
-                    if Session.Rejoin and Session.Rejoin.cancelActivity then
-                        Session.Rejoin.cancelActivity("harvest")
-                    end
                     Harvest.stop("Dihentikan dari toggle.")
                 end
             end,
@@ -22124,923 +22170,6 @@ local function farmReconnect(show)
     if show then notify("Farming", refsText(), 5) end
 end
 
---// --- AUTO REJOIN WORLD: WORLD CLOSED EVENT ONLY ---
-do (function()
-    local Rejoin = {
-        On = false,
-        DelaySec = 5,
-        ScriptUrl = "",
-        LastWorld = "",
-        Last = nil,
-        LastAt = 0,
-        PnBCheckpoint = nil,
-        PnBCheckpointAt = 0,
-        Busy = false,
-        Count = 0,
-        Status = "Nonaktif",
-        Hooked = false,
-        WasInWorld = false,
-        MissingSince = nil,
-        PresenceGraceSec = 3.5,
-        BootstrapPayload = nil,
-        BootstrapStarted = false,
-        PreparedPayload = nil,
-        QueueRegistered = false,
-        TeleportConnection = nil,
-    }
-    Session.Rejoin = Rejoin
-    Config.add("AutoRejoin", Rejoin, { "On", "DelaySec", "ScriptUrl" })
-
-    local RECOVERY_FILE = "ByteHubRecovery.json"
-    local RECOVERY_SETTING = "ByteHubRecoveryV73"
-    local RECOVERY_TTL = 240
-    local MAX_RECOVERY_HOPS = 4
-
-    local function trimText(value)
-        return tostring(value or ""):gsub("^%s*(.-)%s*$", "%1")
-    end
-
-    local function decodeRecovery(raw)
-        if type(raw) == "table" then return raw end
-        if type(raw) ~= "string" or raw == "" then return nil end
-        local ok, decoded = pcall(HttpService.JSONDecode, HttpService, raw)
-        return ok and type(decoded) == "table" and decoded or nil
-    end
-
-    local function sanitizeActivity(saved, world)
-        local result = {}
-        if type(saved) == "table" then
-            for key, value in pairs(saved) do
-                local kind = type(value)
-                if kind == "boolean" or kind == "string" then
-                    result[key] = value
-                elseif kind == "number" and value == value
-                    and value ~= math.huge and value ~= -math.huge then
-                    result[key] = value
-                end
-            end
-        end
-        result.world = world
-        return result
-    end
-
-    local function persistRecoveryPayload(payload)
-        local okEncode, encoded = pcall(HttpService.JSONEncode, HttpService, payload)
-        if not okEncode or type(encoded) ~= "string" then
-            return false, "Gagal mengubah recovery snapshot menjadi JSON"
-        end
-
-        local stored = false
-        if type(writefile) == "function" then
-            local okWrite, writeResult = pcall(writefile, RECOVERY_FILE, encoded)
-            stored = (okWrite and writeResult ~= false) or stored
-        end
-        local okTeleport = pcall(function()
-            TeleportService:SetTeleportSetting(RECOVERY_SETTING, encoded)
-        end)
-        stored = okTeleport or stored
-        Rejoin.RecoveryJson = encoded
-        return stored, encoded
-    end
-
-    local function clearRecoveryStorage()
-        if Rejoin.TeleportConnection then
-            pcall(function() Rejoin.TeleportConnection:Disconnect() end)
-            Rejoin.TeleportConnection = nil
-        end
-        Rejoin.PreparedPayload = nil
-        Rejoin.BootstrapPayload = nil
-        Rejoin.QueueRegistered = false
-        Rejoin.RecoveryJson = nil
-        pcall(function() TeleportService:SetTeleportSetting(RECOVERY_SETTING, "") end)
-        local removed = false
-        if type(delfile) == "function" then
-            local okDelete, deleteResult = pcall(delfile, RECOVERY_FILE)
-            removed = okDelete and deleteResult ~= false
-        end
-        if not removed and type(writefile) == "function" then
-            pcall(writefile, RECOVERY_FILE, "")
-        end
-        pcall(function() executorEnv.__BYTEHUB_PENDING_RECOVERY = nil end)
-    end
-
-    local function loadRecoveryPayload()
-        local payload
-        local pending = executorEnv and executorEnv.__BYTEHUB_PENDING_RECOVERY
-        if pending ~= nil then
-            payload = decodeRecovery(pending)
-            pcall(function() executorEnv.__BYTEHUB_PENDING_RECOVERY = nil end)
-        end
-
-        if not payload then
-            local ok, raw = pcall(function()
-                return TeleportService:GetTeleportSetting(RECOVERY_SETTING)
-            end)
-            if ok then payload = decodeRecovery(raw) end
-        end
-
-        if not payload and type(readfile) == "function" then
-            local ok, raw = pcall(readfile, RECOVERY_FILE)
-            if ok then payload = decodeRecovery(raw) end
-        end
-
-        if type(payload) ~= "table" then return nil end
-        local valid = payload.Version == 1
-            and type(payload.world) == "string" and payload.world ~= ""
-            and type(payload.activity) == "table"
-            and tonumber(payload.expiresAt) ~= nil
-            and tonumber(payload.expiresAt) >= os.time()
-            and (payload.gameId == nil or tonumber(payload.gameId) == tonumber(game.GameId))
-        if not valid then
-            clearRecoveryStorage()
-            return nil
-        end
-        return payload
-    end
-
-    local function findTeleportQueue()
-        local roots = { executorEnv, _G }
-        pcall(function()
-            if type(getfenv) == "function" then
-                local env = getfenv(0)
-                if type(env) == "table" then roots[#roots + 1] = env end
-            end
-        end)
-        local visited = {}
-        local function scan(tbl, depth)
-            if type(tbl) ~= "table" or visited[tbl] then return nil end
-            visited[tbl] = true
-            local entries = {}
-            local ok = pcall(function()
-                for key, value in pairs(tbl) do
-                    entries[#entries + 1] = { key = key, value = value }
-                end
-            end)
-            if not ok then return nil end
-            for _, entry in ipairs(entries) do
-                local key = tostring(entry.key):lower():gsub("[^%w]", "")
-                if type(entry.value) == "function"
-                    and key:find("queue", 1, true)
-                    and key:find("teleport", 1, true) then
-                    return entry.value, tbl, tostring(entry.key)
-                end
-            end
-            if depth < 2 then
-                for _, entry in ipairs(entries) do
-                    if type(entry.value) == "table" then
-                        local fn, owner, name = scan(entry.value, depth + 1)
-                        if fn then return fn, owner, name end
-                    end
-                end
-            end
-            return nil
-        end
-        for _, root in ipairs(roots) do
-            local fn, owner, name = scan(root, 0)
-            if fn then return fn, owner, name end
-        end
-        return nil
-    end
-
-    local function queueByteHubAfterTeleport(payload)
-        if Rejoin.QueueRegistered then return true, "queue sudah terdaftar" end
-        local url = trimText(payload and payload.scriptUrl or Rejoin.ScriptUrl)
-        if url == "" then
-            Rejoin.Status = "Script URL kosong; gunakan Auto Execute executor atau isi Script URL"
-            return false, "Script URL kosong"
-        end
-        if not url:match("^https?://") then
-            Rejoin.Status = "Script URL tidak valid; gunakan alamat HTTP/HTTPS"
-            return false, "Script URL harus diawali http:// atau https://"
-        end
-
-        local stored, encoded = persistRecoveryPayload(payload)
-        if type(encoded) ~= "string" then return false, tostring(encoded) end
-        if not stored then
-            Rejoin.Status = "Snapshot tidak dapat disimpan; pemulihan setelah teleport tidak dijamin"
-            return false, "Recovery storage tidak tersedia"
-        end
-        local queueFn, owner = findTeleportQueue()
-        if type(queueFn) ~= "function" then
-            Rejoin.Status = "Queue tidak tersedia; recovery tersimpan, Auto Execute diperlukan"
-            return false, "Fungsi queue teleport tidak ditemukan"
-        end
-
-        -- Payload dibaca dari TeleportSettings/ByteHubRecovery.json oleh script
-        -- baru. Jangan tanam snapshot ke queue string agar toggle OFF manual
-        -- tetap dapat membatalkan recovery sebelum teleport selesai.
-        local queuedCode = string.format([[
-local recoveryFound = false
-pcall(function()
-    local teleportService = game:GetService("TeleportService")
-    local value = teleportService:GetTeleportSetting("ByteHubRecoveryV73")
-    recoveryFound = type(value) == "string" and value ~= ""
-end)
-if not recoveryFound and type(readfile) == "function" then
-    local ok, value = pcall(readfile, "ByteHubRecovery.json")
-    recoveryFound = ok and type(value) == "string" and value ~= ""
-end
-if not recoveryFound then return end
-local url = %q
-local ok, source = pcall(function() return game:HttpGet(url) end)
-if not ok or type(source) ~= "string" then
-    warn("[BYTEHUB] Tidak dapat mengambil Script URL setelah teleport")
-    return
-end
-if type(loadstring) ~= "function" then
-    warn("[BYTEHUB] loadstring tidak tersedia setelah teleport")
-    return
-end
-local chunk, compileError = loadstring(source)
-if type(chunk) ~= "function" then
-    warn("[BYTEHUB] Gagal compile script: " .. tostring(compileError))
-    return
-end
-local ran, runError = pcall(chunk)
-if not ran then warn("[BYTEHUB] Gagal menjalankan ulang script: " .. tostring(runError)) end
-]], url)
-
-        local okQueue, queueResult = pcall(queueFn, queuedCode)
-        if (not okQueue or queueResult == false) and owner then
-            okQueue, queueResult = pcall(queueFn, owner, queuedCode)
-        end
-        if not okQueue or queueResult == false then
-            Rejoin.Status = "Queue teleport gagal: " .. tostring(queueResult)
-            return false, tostring(queueResult)
-        end
-        Rejoin.QueueRegistered = true
-        Rejoin.Status = "ByteHub disiapkan untuk dijalankan ulang setelah teleport"
-        return true
-    end
-
-    local function buildRecoveryPayload(saved, world, reason)
-        local activity = sanitizeActivity(saved, world)
-        local previousHops = tonumber(Rejoin.BootstrapPayload and Rejoin.BootstrapPayload.hops) or 0
-        return {
-            Version = 1,
-            createdAt = os.time(),
-            expiresAt = os.time() + RECOVERY_TTL,
-            gameId = game.GameId,
-            placeId = game.PlaceId,
-            world = world,
-            activity = activity,
-            rejoinOn = Rejoin.On == true,
-            delaySec = tonumber(Rejoin.DelaySec) or 5,
-            scriptUrl = trimText(Rejoin.ScriptUrl),
-            reason = tostring(reason or "Auto Rejoin"),
-            hops = previousHops + 1,
-        }
-    end
-
-    local function armTeleportRecovery(saved, world, reason)
-        local payload = buildRecoveryPayload(saved, world, reason)
-        Rejoin.PreparedPayload = payload
-        Rejoin.QueueRegistered = false
-        persistRecoveryPayload(payload)
-        if Rejoin.TeleportConnection then
-            pcall(function() Rejoin.TeleportConnection:Disconnect() end)
-            Rejoin.TeleportConnection = nil
-        end
-
-        local okSignal, signal = pcall(function() return LocalPlayer.OnTeleport end)
-        if okSignal and signal then
-            local okConnect, connection = pcall(function()
-                return signal:Connect(function(state)
-                    local stateName = tostring(state):lower()
-                    local starting = stateName:find("started", 1, true)
-                        or stateName:find("waitingforserver", 1, true)
-                        or stateName:find("inprogress", 1, true)
-                    if starting then
-                        queueByteHubAfterTeleport(payload)
-                    end
-                end)
-            end)
-            if okConnect then Rejoin.TeleportConnection = connection end
-        end
-        return payload
-    end
-
-    local function inWorld()
-        local w = Refs.World
-        return w ~= nil
-            and type(rawget(w, "fg")) == "table"
-            and type(rawget(w, "name")) == "string"
-            and rawget(w, "name") ~= ""
-    end
-
-    Rejoin.BootstrapPayload = loadRecoveryPayload()
-    if Rejoin.BootstrapPayload then
-        local payload = Rejoin.BootstrapPayload
-        if payload.rejoinOn == true then Rejoin.On = true end
-        if Rejoin.ScriptUrl == "" and type(payload.scriptUrl) == "string" then
-            Rejoin.ScriptUrl = payload.scriptUrl
-        end
-        Rejoin.DelaySec = math.clamp(math.floor(tonumber(payload.delaySec) or Rejoin.DelaySec), 2, 30)
-        Rejoin.LastWorld = payload.world
-        Rejoin.Last = payload.activity
-        Rejoin.Pending = payload.activity
-        Rejoin.LastAt = os.clock()
-        if payload.activity.farm then State.RejoinPending = true end
-    end
-
-    local function hasSavedActivity(saved)
-        return saved and (
-            saved.farm or saved.plant or saved.harvest or saved.clear
-            or saved.spam or saved.splice or saved.pabrik or saved.build or saved.vend
-        )
-    end
-
-    -- Simpan dua koordinat:
-    -- gridX/gridY = titik pusat grid yang dipakai farmLoop (getPlayerTile).
-    -- walkX/walkY = node pijakan yang dimengerti A* (Auto.here/startNode).
-    function Rejoin.updatePnBCheckpoint(gridX, gridY, force)
-        if not Rejoin.On or not State.Running or State.Override then return false end
-
-        local now = os.clock()
-        if not force and now - (Rejoin.PnBCheckpointAt or 0) < 2 then
-            return true
-        end
-
-        if type(gridX) ~= "number" or type(gridY) ~= "number" then
-            gridX, gridY = getPlayerTile()
-        end
-        if type(gridX) ~= "number" or type(gridY) ~= "number" then return false end
-
-        local walkX, walkY = Auto.here()
-        if type(walkX) ~= "number" or type(walkY) ~= "number" then return false end
-
-        local world = Guard.worldName()
-        if type(world) ~= "string" or world == "" then return false end
-
-        Rejoin.PnBCheckpoint = {
-            world = world,
-            gridX = gridX,
-            gridY = gridY,
-            walkX = walkX,
-            walkY = walkY,
-            at = now,
-        }
-        Rejoin.PnBCheckpointAt = now
-        Rejoin.LastWorld = world
-
-        -- Simpan snapshot aktivitas juga pada saat checkpoint dibuat.
-        -- Ini menutup celah kick yang terjadi sebelum loop snapshot 0,5 detik berjalan.
-        if type(Guard.snapshot) == "function" then
-            local ok, saved = pcall(Guard.snapshot)
-            if ok and type(saved) == "table" and saved.farm then
-                saved.world = world
-                saved.pnbX, saved.pnbY = walkX, walkY
-                saved.pnbGridX, saved.pnbGridY = gridX, gridY
-                Rejoin.Last = saved
-                Rejoin.LastAt = now
-            end
-        end
-        return true
-    end
-
-    -- Snapshot umum tetap dipakai untuk aktivitas lain.
-    -- Checkpoint PnB diperbarui terpisah dari titik pusat grid yang sebenarnya.
-    local function captureSnapshot()
-        if not Rejoin.On then
-            Rejoin.Last = nil
-            Rejoin.PnBCheckpoint = nil
-            Rejoin.Pending = nil
-            State.RejoinPending = false
-            if UI.GridSync then pcall(UI.GridSync) end
-            return
-        end
-        if not inWorld() or Guard.Mode ~= "idle" then return end
-        local world = Guard.worldName()
-        if world == "" then return end
-
-        Rejoin.LastWorld = world
-
-        -- Capture berkala setiap 2 detik. Capture pertama dilakukan langsung dari startFarm().
-        if State.Running and not State.Override then
-            Rejoin.updatePnBCheckpoint(nil, nil, false)
-        end
-
-        if Guard.anyRunning() and not Pabrik.Traveling and not WorldFinder.Busy then
-            local ok, saved = pcall(Guard.snapshot)
-            if ok and type(saved) == "table" and saved.world == world then
-                if saved.farm and Rejoin.PnBCheckpoint
-                    and Rejoin.PnBCheckpoint.world == world then
-                    saved.pnbX, saved.pnbY = Rejoin.PnBCheckpoint.walkX, Rejoin.PnBCheckpoint.walkY
-                    saved.pnbGridX, saved.pnbGridY = Rejoin.PnBCheckpoint.gridX, Rejoin.PnBCheckpoint.gridY
-                elseif saved.farm and Rejoin.Last and Rejoin.Last.farm
-                    and Rejoin.Last.world == world then
-                    saved.pnbX, saved.pnbY = Rejoin.Last.pnbX, Rejoin.Last.pnbY
-                    saved.pnbGridX, saved.pnbGridY = Rejoin.Last.pnbGridX, Rejoin.Last.pnbGridY
-                end
-                Rejoin.Last = saved
-                Rejoin.LastAt = os.clock()
-            end
-        elseif Rejoin.Last and os.clock() - (Rejoin.LastAt or 0) > 60 then
-            -- Simpan snapshot lebih lama karena worker dapat berhenti sesaat
-            -- sebelum event WorldClosed diterima. Stop manual dibersihkan eksplisit.
-            Rejoin.Last = nil
-            Rejoin.PnBCheckpoint = nil
-        end
-    end
-
-    local function updatePersistedActivity(kind)
-        local payload = Rejoin.PreparedPayload or Rejoin.BootstrapPayload
-        if type(payload) ~= "table" or type(payload.activity) ~= "table" then return end
-        payload.activity[kind] = false
-        if kind == "farm" then
-            payload.activity.pnbX, payload.activity.pnbY = nil, nil
-            payload.activity.pnbGridX, payload.activity.pnbGridY = nil, nil
-            payload.activity.tx, payload.activity.ty = nil, nil
-        end
-        if not hasSavedActivity(payload.activity) then
-            clearRecoveryStorage()
-        else
-            persistRecoveryPayload(payload)
-        end
-    end
-
-    function Rejoin.cancelActivity(kind)
-        local function clear(saved)
-            if type(saved) ~= "table" then return end
-            saved[kind] = false
-            if kind == "farm" then
-                saved.pnbX, saved.pnbY, saved.tx, saved.ty = nil, nil, nil, nil
-                saved.pnbGridX, saved.pnbGridY = nil, nil
-            end
-        end
-        clear(Rejoin.Last)
-        clear(Rejoin.Pending)
-        updatePersistedActivity(kind)
-        if kind == "farm" then
-            Rejoin.PnBCheckpoint = nil
-            Rejoin.PnBCheckpointAt = 0
-            State.RejoinPending = false
-            if UI.GridSync then pcall(UI.GridSync) end
-        end
-        if Rejoin.Last and not hasSavedActivity(Rejoin.Last) then Rejoin.Last = nil end
-        if Rejoin.Pending and not hasSavedActivity(Rejoin.Pending) then Rejoin.Pending = nil end
-    end
-
-    function Rejoin.clearPending(kind)
-        if Rejoin.Pending then
-            Rejoin.Pending[kind] = false
-            if not hasSavedActivity(Rejoin.Pending) then Rejoin.Pending = nil end
-        end
-        updatePersistedActivity(kind)
-        if kind == "farm" then
-            State.RejoinPending = false
-            if UI.GridSync then pcall(UI.GridSync) end
-        end
-    end
-
-    local function activityIsRunning(saved)
-        if saved.plant then
-            return plantState.running == true and plantState.workerActive == true
-        elseif saved.harvest then
-            return Harvest.Running == true and Harvest.WorkerActive == true
-        elseif saved.farm then
-            return State.Running == true
-        elseif saved.build then
-            return Build.Running == true
-        elseif saved.pabrik then
-            return Pabrik.Running == true
-        elseif saved.vend then
-            return Vend.Running == true
-        elseif saved.clear then
-            return Clear.Running == true
-        elseif saved.splice then
-            return Splice.Running == true
-        elseif saved.spam then
-            return Spam.On == true
-        end
-        return not hasSavedActivity(saved)
-    end
-
-    local function waitForActivityResume(saved, timeout)
-        if not hasSavedActivity(saved) then return true end
-        local deadline = os.clock() + (timeout or 90)
-        local attempts = 0
-        local nextRetryAt = os.clock()
-        while alive() and Rejoin.On and os.clock() < deadline do
-            if activityIsRunning(saved) then return true end
-            if Guard.Mode ~= "back" and attempts < 3 and os.clock() >= nextRetryAt then
-                attempts += 1
-                Guard.resumeSaved(saved)
-                nextRetryAt = os.clock() + 20
-            end
-            task.wait(0.25)
-        end
-        return alive() and Rejoin.On and activityIsRunning(saved)
-    end
-
-    local function resumeAfterEnter(saved, world, reason)
-        if saved and saved.world ~= "" and saved.world ~= world then
-            saved = nil
-        end
-        if not alive() or not Rejoin.On then return false end
-
-        -- Selalu bangun ulang referensi setelah rejoin. Refs.World, Refs.State,
-        -- tree refs, inventory, dan closure Auto Plant bisa menunjuk ke sesi lama.
-        Rejoin.Status = "Memperbarui referensi world..."
-        local refreshOk, refreshErr = pcall(farmReconnect, false)
-        if not refreshOk then
-            warn("[AutoRejoin] Refresh referensi gagal: " .. tostring(refreshErr))
-        end
-
-        local refsReady = false
-        local refsDeadline = os.clock() + 15
-        while alive() and Rejoin.On and os.clock() < refsDeadline do
-            if inWorld() and Guard.worldName() == world and playerState() then
-                refsReady = true
-                break
-            end
-            pcall(Anim.quickRefs)
-            task.wait(0.25)
-        end
-        if not alive() or not Rejoin.On then return false end
-        if not refsReady then
-            Rejoin.Status = "World masuk, tetapi referensi karakter belum siap. Mengulang pemulihan..."
-            return false
-        end
-
-        Rejoin.WasInWorld = true
-        Rejoin.MissingSince = nil
-        Rejoin.LastWorld = world
-
-        if hasSavedActivity(saved) then
-            local movementReady = false
-            local deadline = os.clock() + 20
-            while alive() and Rejoin.On and os.clock() < deadline do
-                local bound = Session.bindMovement(true)
-                if Auto.here() and bound then
-                    movementReady = true
-                    break
-                end
-                pcall(Anim.quickRefs)
-                task.wait(0.5)
-            end
-            if not alive() or not Rejoin.On then return false end
-            if not movementReady then
-                Rejoin.Status = "World siap, tetapi kontrol karakter belum siap. Mengulang pemulihan..."
-                return false
-            end
-        end
-
-        Guard.afterEnter()
-
-        Rejoin.Count += 1
-        if hasSavedActivity(saved) then
-            Rejoin.Status = "Masuk kembali. Melanjutkan aktivitas..."
-            notify("Auto Rejoin", "Kembali ke " .. world .. ". Melanjutkan aktivitas.", 5)
-            Hook.send("rejoin", reason .. " ke " .. world .. ", aktivitas dilanjutkan")
-            -- Guard.resumeSaved berjalan asynchronous. Tunggu sampai worker yang
-            -- diminta benar-benar aktif sebelum menyatakan recovery berhasil.
-            local resumed = waitForActivityResume(saved, 100)
-            if not resumed then
-                Rejoin.Status = "World berhasil dimasuki, tetapi aktivitas belum aktif. Pemulihan akan dicoba kembali..."
-                return false
-            end
-            clearRecoveryStorage()
-            Rejoin.Status = "Berhasil masuk kembali dan aktivitas dilanjutkan"
-            notify("Auto Rejoin", "Kembali ke " .. world .. ". Aktivitas sudah berjalan.", 5)
-            Hook.send("rejoin", reason .. " ke " .. world .. ", worker aktif")
-        else
-            clearRecoveryStorage()
-            Rejoin.Status = "Berhasil masuk kembali ke " .. world
-            notify("Auto Rejoin", "Berhasil kembali ke " .. world, 4)
-            Hook.send("rejoin", reason .. " ke " .. world)
-        end
-        return true
-    end
-
-    local function enterAndResume(world, saved, reason)
-        for attempt = 1, 3 do
-            if not alive() or not Rejoin.On then return false end
-
-            -- Saat berada di layar pemilihan world, menu game tetap harus ditemukan.
-            if not Refs.Menu or type(rawget(Refs.Menu, "enter")) ~= "function" then
-                pcall(farmReconnect, false)
-            end
-
-            Rejoin.Status = ("Masuk ke %s (%d/3)..."):format(world, attempt)
-            local ok, err, hopping
-            if inWorld() and Guard.worldName() == world then
-                -- World sudah masuk; ulangi refresh/resume tanpa mengirim enter kedua.
-                ok = true
-            else
-                -- Persist snapshot dan pasang listener sebelum menu.enter memulai teleport.
-                local prepared = armTeleportRecovery(saved, world, reason)
-                ok, err, hopping = Guard.enterWorld(world)
-                if hopping == true then
-                    -- Fallback jika event Player.OnTeleport tidak tersedia/tidak terpanggil.
-                    queueByteHubAfterTeleport(prepared)
-                elseif not (ok and inWorld() and Guard.worldName() == world) then
-                    if Rejoin.TeleportConnection then
-                        pcall(function() Rejoin.TeleportConnection:Disconnect() end)
-                        Rejoin.TeleportConnection = nil
-                    end
-                end
-            end
-
-            -- Beberapa versi game menandai proses masuk sebagai perpindahan server.
-            -- Tunggu world yang sama muncul kembali selama script masih hidup.
-            if hopping == true then
-                Rejoin.Status = "Menunggu pemuatan world " .. world .. "..."
-                local deadline = os.clock() + 30
-                while alive() and Rejoin.On and os.clock() < deadline do
-                    if inWorld() and Guard.worldName() == world then
-                        ok = true
-                        break
-                    end
-                    if not Refs.Menu then pcall(Anim.quickRefs) end
-                    task.wait(0.5)
-                end
-                if not ok then err = err or "transisi world belum selesai" end
-            end
-
-            if ok and inWorld() and Guard.worldName() == world then
-                task.wait(1.5)
-                if not alive() or not Rejoin.On then return false end
-                local resumed = resumeAfterEnter(saved, world, reason)
-                if resumed then return true end
-                if not alive() or not Rejoin.On then return false end
-                err = Rejoin.Status or "referensi world belum siap"
-            end
-
-            Rejoin.Status = ("Gagal masuk %s (%d/3): %s"):format(world, attempt, tostring(err or "world belum siap"))
-            if attempt < 3 then task.wait(8) end
-        end
-
-        Rejoin.Status = "Gagal masuk kembali ke " .. world
-        notify("Auto Rejoin", "Gagal masuk kembali ke " .. world .. ". Periksa world dan coba manual.", 6)
-        Hook.send("rejoin", "Gagal masuk kembali ke " .. world)
-        return false
-    end
-
-    local function onWorldClosed(message)
-        if not Rejoin.On or Rejoin.Busy or Pabrik.Traveling or WorldFinder.Busy then return end
-        -- Jangan bentrok dengan proses keluar world yang memang dimulai Guard.
-        if Guard.Mode == "away" or Guard.Mode == "out" or Guard.Mode == "back" then return end
-
-        Rejoin.WasInWorld = false
-        Rejoin.MissingSince = nil
-
-        local saved = Rejoin.Last
-        if saved and (saved.world == "" or os.clock() - (Rejoin.LastAt or 0) > 60) then
-            saved = nil
-        end
-        -- Ambil snapshot terakhir walaupun referensi world sudah hilang.
-        -- Beberapa kick menghapus player state lebih dahulu daripada WorldClosed.
-        if Guard.anyRunning() or plantState.workerActive or Harvest.WorkerActive or Harvest.HarvestWorkerBusy then
-            local ok, current = pcall(Guard.snapshot)
-            if ok and type(current) == "table" and hasSavedActivity(current) then
-                if type(current.world) ~= "string" or current.world == "" then
-                    current.world = Rejoin.LastWorld ~= "" and Rejoin.LastWorld or Guard.worldName()
-                end
-                if current.farm and Rejoin.PnBCheckpoint
-                    and Rejoin.PnBCheckpoint.world == current.world then
-                    current.pnbX, current.pnbY = Rejoin.PnBCheckpoint.walkX, Rejoin.PnBCheckpoint.walkY
-                    current.pnbGridX, current.pnbGridY = Rejoin.PnBCheckpoint.gridX, Rejoin.PnBCheckpoint.gridY
-                elseif current.farm and saved and saved.farm and saved.world == current.world then
-                    current.pnbX, current.pnbY = saved.pnbX, saved.pnbY
-                    current.pnbGridX, current.pnbGridY = saved.pnbGridX, saved.pnbGridY
-                end
-                if current.world ~= "" then saved = current end
-            end
-        end
-        if saved and saved.farm and Rejoin.PnBCheckpoint
-            and Rejoin.PnBCheckpoint.world == saved.world then
-            saved.pnbX, saved.pnbY = Rejoin.PnBCheckpoint.walkX, Rejoin.PnBCheckpoint.walkY
-            saved.pnbGridX, saved.pnbGridY = Rejoin.PnBCheckpoint.gridX, Rejoin.PnBCheckpoint.gridY
-        end
-        if not saved and Guard.Saved then saved = Guard.Saved end
-        if not saved and Rejoin.PnBCheckpoint then
-            local cp = Rejoin.PnBCheckpoint
-            saved = {
-                farm = true,
-                world = cp.world,
-                pnbX = cp.walkX,
-                pnbY = cp.walkY,
-                pnbGridX = cp.gridX,
-                pnbGridY = cp.gridY,
-            }
-        end
-
-        local target = (saved and saved.world ~= "" and saved.world)
-            or Rejoin.LastWorld
-            or Guard.worldName()
-        if type(target) ~= "string" or target == "" then return end
-
-        -- Simpan state sebelum worker dihentikan dan sebelum proses masuk world
-        -- berpotensi memindahkan sesi/server.
-        local prepared = buildRecoveryPayload(saved, target, "Kick dari world")
-        Rejoin.PreparedPayload = prepared
-        persistRecoveryPayload(prepared)
-
-        Rejoin.Busy = true
-        task.spawn(function()
-            local worldBefore = Guard.worldName()
-            Rejoin.Pending = nil
-            if type(saved) == "table" then
-                Rejoin.Pending = {}
-                for key, value in pairs(saved) do
-                    Rejoin.Pending[key] = value
-                end
-            end
-            if Guard.anyRunning() or plantState.workerActive or Harvest.WorkerActive or Harvest.HarvestWorkerBusy then
-                Rejoin.Pausing = true
-                Guard.stopAll()
-                -- stopAll menghentikan worker aktif; panggil juga pada worker yang
-                -- sudah menurunkan Running tetapi coroutine lamanya belum selesai.
-                if plantState.workerActive and stopAutoPlant then
-                    pcall(stopAutoPlant, "Dijeda untuk pemulihan world.")
-                end
-                if (Harvest.WorkerActive or Harvest.HarvestWorkerBusy) and Harvest.stop then
-                    pcall(Harvest.stop, "Dijeda untuk pemulihan world.")
-                end
-                Rejoin.Pausing = false
-            end
-
-            -- Worker dijeda, tetapi kontrol tetap ON sebagai tanda akan dilanjutkan.
-            if saved then
-                if saved.plant and UI.PlantToggle then
-                    pcall(function() UI.PlantToggle:Set(true, true) end)
-                end
-                if saved.harvest and UI.HarvestToggle then
-                    pcall(function() UI.HarvestToggle:Set(true, true) end)
-                end
-                if saved.farm then
-                    State.RejoinPending = true
-                    if UI.GridSync then pcall(UI.GridSync) end
-                end
-            end
-
-            local detail = tostring(message or ""):gsub("`.", "")
-            Rejoin.Status = "Terlempar dari " .. target .. ". Menyiapkan rejoin..."
-            Hook.send("rejoin", "Terlempar dari world " .. target
-                .. (detail ~= "" and (" (" .. detail .. ")") or ""))
-
-            task.wait(math.max(2, tonumber(Rejoin.DelaySec) or 5) + 1.5)
-            if not alive() or not Rejoin.On then
-                Rejoin.Busy = false
-                return
-            end
-
-            -- Jika event diterima sebelum game memindahkan avatar ke layar pilih world,
-            -- gunakan Exit World agar menu masuk tersedia.
-            if Guard.worldName() ~= "" and Guard.worldName() == worldBefore then
-                pcall(Guard.leaveWorld)
-                task.wait(1.5)
-            end
-
-            if alive() and Rejoin.On then
-                enterAndResume(target, saved, "Rejoin setelah kick")
-            end
-            Rejoin.Busy = false
-        end)
-    end
-
-    local function hookWorldClosed()
-        if Rejoin.Hooked then return true end
-
-        -- Game versi baru: WorldClosed dikirim melalui Net (ByteNet).
-        if NetOk and type(Net) == "table" and type(Net.on) == "function"
-            and type(Net.EVENTS) == "table" and Net.EVENTS.WorldClosed then
-            local ok = pcall(Net.on, "WorldClosed", function(message)
-                if alive() then onWorldClosed(message) end
-            end, function()
-                local w = Refs.World
-                return w and rawget(w, "name") or ""
-            end)
-            if ok then
-                Rejoin.Hooked = true
-                Rejoin.Status = Rejoin.On and "Memantau event WorldClosed" or "Nonaktif"
-                return true
-            end
-        end
-
-        -- Fallback untuk versi game yang masih memakai RemoteEvent.
-        local remotes = WorldRemotes or ReplicatedStorage:FindFirstChild("WorldRemotes")
-        local closed = remotes and remotes:FindFirstChild("WorldClosed")
-        if closed and closed:IsA("RemoteEvent") then
-            table.insert(Connections, closed.OnClientEvent:Connect(function(message)
-                if alive() then onWorldClosed(message) end
-            end))
-            Rejoin.Hooked = true
-            Rejoin.Status = Rejoin.On and "Memantau event WorldClosed" or "Nonaktif"
-            return true
-        end
-        return false
-    end
-
-    hookWorldClosed()
-
-    function Rejoin.bootstrapRecovery()
-        local payload = Rejoin.BootstrapPayload
-        if not payload or Rejoin.BootstrapStarted then return false end
-        Rejoin.BootstrapStarted = true
-
-        if payload.rejoinOn ~= true or not Rejoin.On then
-            clearRecoveryStorage()
-            return false
-        end
-        if (tonumber(payload.hops) or 0) > MAX_RECOVERY_HOPS then
-            Rejoin.Status = "Pemulihan dihentikan: batas perpindahan server tercapai"
-            clearRecoveryStorage()
-            notify("Auto Rejoin", Rejoin.Status, 6)
-            return false
-        end
-
-        local world = tostring(payload.world or "")
-        if world == "" then
-            clearRecoveryStorage()
-            Rejoin.Status = "Pemulihan gagal: world terakhir tidak tersimpan"
-            return false
-        end
-
-        local saved = sanitizeActivity(payload.activity, world)
-        Rejoin.On = true
-        local recoveredUrl = trimText(payload.scriptUrl)
-        if recoveredUrl ~= "" then Rejoin.ScriptUrl = recoveredUrl end
-        Rejoin.DelaySec = math.clamp(math.floor(tonumber(payload.delaySec) or Rejoin.DelaySec), 2, 30)
-        Rejoin.LastWorld = world
-        Rejoin.Last, Rejoin.Pending = saved, saved
-        Rejoin.LastAt = os.clock()
-        if saved.farm then
-            State.RejoinPending = true
-            if UI.GridSync then pcall(UI.GridSync) end
-        end
-
-        Rejoin.Busy = true
-        task.spawn(function()
-            local ok, err = pcall(function()
-                if inWorld() and Guard.worldName() == world then
-                    return resumeAfterEnter(saved, world, "Pemulihan setelah teleport")
-                end
-                return enterAndResume(world, saved, "Pemulihan setelah teleport")
-            end)
-            if not ok then
-                Rejoin.Status = "Pemulihan setelah teleport gagal: " .. tostring(err)
-                warn("[AutoRejoin] Bootstrap error: " .. tostring(err))
-            elseif err ~= true then
-                Rejoin.Status = Rejoin.Status or "Pemulihan belum selesai"
-            end
-            Rejoin.Busy = false
-        end)
-        return true
-    end
-
-    task.spawn(function()
-        local lastHookTry = os.clock()
-        while alive() do
-            captureSnapshot()
-
-            -- Fallback polling: tidak semua jenis kick mengirim event WorldClosed.
-            -- Presence harus hilang terus-menerus beberapa detik agar respawn/lag
-            -- singkat tidak dianggap sebagai kick.
-            if Rejoin.On then
-                local present = inWorld() and playerState() ~= nil
-                if present and not Rejoin.Busy then
-                    Rejoin.WasInWorld = true
-                    Rejoin.MissingSince = nil
-                    local currentWorld = Guard.worldName()
-                    if currentWorld ~= "" then Rejoin.LastWorld = currentWorld end
-                elseif Rejoin.WasInWorld and not Rejoin.Busy
-                    and Guard.Mode ~= "away" and Guard.Mode ~= "out" and Guard.Mode ~= "back"
-                    and not Pabrik.Traveling and not WorldFinder.Busy then
-                    Rejoin.MissingSince = Rejoin.MissingSince or os.clock()
-                    if os.clock() - Rejoin.MissingSince >= Rejoin.PresenceGraceSec then
-                        local reason = not inWorld() and "referensi world hilang" or "karakter tidak aktif"
-                        Rejoin.WasInWorld = false
-                        onWorldClosed("Fallback polling: " .. reason)
-                    end
-                end
-            else
-                Rejoin.WasInWorld = false
-                Rejoin.MissingSince = nil
-            end
-
-            if not Rejoin.Hooked and os.clock() - lastHookTry >= 5 then
-                lastHookTry = os.clock()
-                hookWorldClosed()
-            end
-
-            if not Rejoin.Busy then
-                if not Rejoin.On then
-                    Rejoin.Status = "Nonaktif"
-                elseif not Rejoin.Hooked then
-                    Rejoin.Status = "Memantau world/karakter (fallback aktif; event belum ditemukan)"
-                elseif inWorld() then
-                    Rejoin.Status = "Memantau: " .. Guard.worldName()
-                else
-                    Rejoin.Status = "Menunggu world/karakter kembali"
-                end
-            end
-            task.wait(0.5)
-        end
-    end)
-end)() end
-
 --// --- SETTING: GENERAL ---
 do (function()
     local function saveGeneral()
@@ -23056,68 +22185,6 @@ do (function()
     local gCharacter = box(GeneralTab, "KARAKTER", true)
     local gCalibration = box(GeneralTab, "KOREKSI POSISI", false)
     local gEffects = box(GeneralTab, "EFEK DAN PERFORMA", false)
-    local gRecovery = box(GeneralTab, "WORLD RECOVERY", false)
-    local Rejoin = Session.Rejoin
-
-    safe(function()
-        UI.RejoinStatus = gRecovery:Paragraph({
-            Title = "Status Auto Rejoin",
-            Desc = Rejoin and Rejoin.Status or "Tidak tersedia",
-        })
-    end)
-
-    safe(function()
-        gRecovery:Toggle({
-            Title = "Auto Rejoin World",
-            Desc = "Masuk kembali ke world terakhir saat WorldClosed atau kehilangan world/karakter terdeteksi.",
-            Value = Rejoin and Rejoin.On or false,
-            Callback = function(on)
-                if not Rejoin then return end
-                Rejoin.On = on == true
-                Rejoin.MissingSince = nil
-                local currentWorldRef = Refs.World
-                local hasWorldRef = currentWorldRef ~= nil
-                    and type(rawget(currentWorldRef, "fg")) == "table"
-                    and type(rawget(currentWorldRef, "name")) == "string"
-                    and rawget(currentWorldRef, "name") ~= ""
-                Rejoin.WasInWorld = Rejoin.On and hasWorldRef and playerState() ~= nil or false
-                if Rejoin.WasInWorld then Rejoin.LastWorld = Guard.worldName() end
-                if not Rejoin.On then
-                    Rejoin.Last, Rejoin.PnBCheckpoint, Rejoin.Pending = nil, nil, nil
-                    Rejoin.PnBCheckpointAt = 0
-                    Rejoin.WasInWorld = false
-                    State.RejoinPending = false
-                    clearRecoveryStorage()
-                    if UI.GridSync then pcall(UI.GridSync) end
-                end
-                saveGeneral()
-            end,
-        })
-    end)
-
-    UI.Label(gRecovery, "Raw Script URL untuk menjalankan ulang ByteHub setelah teleport. Kosongkan jika mengandalkan Auto Execute executor.")
-    UI.Input(gRecovery, "Script URL", "Isi Raw URL script ByteHub", Rejoin and Rejoin.ScriptUrl or "", function(value)
-        if not Rejoin then return end
-        local url = trimText(value)
-        if url ~= "" and not url:match("^https?://") then
-            notify("Auto Rejoin", "Script URL harus diawali http:// atau https://", 4)
-            return
-        end
-        Rejoin.ScriptUrl = url
-        saveGeneral()
-    end)
-
-    addNumber(gRecovery, {
-        Title = "Jeda sebelum masuk kembali (detik)",
-        Desc = "Waktu tunggu setelah avatar dikeluarkan dari world.",
-        Min = 2, Max = 30, Step = 1, Default = Rejoin and Rejoin.DelaySec or 5,
-        Callback = function(value)
-            if not Rejoin then return end
-            Rejoin.DelaySec = math.clamp(math.floor(value), 2, 30)
-            saveGeneral()
-        end,
-    })
-
     safe(function()
         gConnection:Button({
             Title = "Hubungkan ke Game",
@@ -23277,9 +22344,6 @@ do (function()
                     pcall(function() UI.GeneralStatus:SetDesc(current) end)
                 end
             end
-            if UI.RejoinStatus and Session.Rejoin then
-                pcall(function() UI.RejoinStatus:SetDesc(Session.Rejoin.Status or "-") end)
-            end
             task.wait(1)
         end
     end)
@@ -23300,9 +22364,6 @@ task.spawn(function()
     end
     if not alive() then return end
     farmReconnect("Farming")
-    if Session.Rejoin and type(Session.Rejoin.bootstrapRecovery) == "function" then
-        pcall(Session.Rejoin.bootstrapRecovery)
-    end
     if Config.saved("Penjaga", "On") == true and Guard.set then
         pcall(Guard.set, true)
         if UI.GuardToggle then pcall(function() UI.GuardToggle:Set(true) end) end
@@ -23339,6 +22400,11 @@ task.spawn(function()
 end)
 
 local function farmCleanup()
+    local reconnectRuntime = executorEnv.__ByteHubAutoReconnect
+    if type(reconnectRuntime) == "table" and type(reconnectRuntime.Shutdown) == "function" then
+        pcall(reconnectRuntime.Shutdown)
+    end
+
     WorldFinder.Running, WorldFinder.Cancelled = false, true
     if WorldFinder.checkpoint then pcall(WorldFinder.checkpoint, false) end
     AutoDrop.On, AutoDrop.Cancelled = false, true
@@ -23378,7 +22444,11 @@ local function farmCleanup()
     end
     pcall(function() FlyPad:Destroy() end)
     if executorEnv.__plantBridge then executorEnv.__plantBridge = nil end
-    if G.__n4thOpus == Session then G.__n4thOpus = nil end
+    local activeReconnectBridge = executorEnv.__ByteHubReconnectBridge
+    if type(activeReconnectBridge) == "table" and activeReconnectBridge.Owner == Session then
+        executorEnv.__ByteHubReconnectBridge = nil
+    end
+    if G.__ByteHubOpus == Session then G.__ByteHubOpus = nil end
 end
 
 Session.Cleanup = farmCleanup
@@ -23402,6 +22472,779 @@ selectTab("Dashboard")
 setOpen(true)
 setAccentIndex(State.accentIndex)
 loadConfig(true)
+--// BYTEHUB AUTO RECONNECT (INTEGRATED)
+do
+    local function startByteHubAutoReconnect()
+        local function getEnvironment()
+            if type(getgenv) == "function" then
+                local ok, value = pcall(getgenv)
+                if ok and type(value) == "table" then return value end
+            end
+            return _G
+        end
+
+        local Env = getEnvironment()
+        local bridgeDeadline = os.clock() + 35
+        local Bridge = Env.__ByteHubReconnectBridge
+
+        while type(Bridge) ~= "table" and os.clock() < bridgeDeadline do
+            task.wait(0.25)
+            Bridge = Env.__ByteHubReconnectBridge
+        end
+
+        if type(Bridge) ~= "table" or Bridge.Version ~= 1 then
+            error("[ByteHub] Bridge tidak ditemukan. Jalankan script utama ByteHub V72 terlebih dahulu.", 0)
+        end
+        if type(Bridge.Tab) ~= "table" or type(Bridge.Tab.Toggle) ~= "function" then
+            error("[ByteHub] Tab Auto Reconnect belum tersedia pada UI ByteHub.", 0)
+        end
+        if type(Bridge.isAlive) ~= "function" or not Bridge.isAlive() then
+            error("[ByteHub] Session ByteHub tidak aktif.", 0)
+        end
+
+        local previous = Env.__ByteHubAutoReconnect
+        if type(previous) == "table" and type(previous.Shutdown) == "function" then
+            pcall(previous.Shutdown)
+        end
+
+        local Runtime = {
+            Active = true,
+            Bridge = Bridge,
+            Connections = {},
+            Count = 0,
+        }
+        Env.__ByteHubAutoReconnect = Runtime
+
+        local function active()
+            return Runtime.Active
+                and Env.__ByteHubAutoReconnect == Runtime
+                and type(Bridge.isAlive) == "function"
+                and Bridge.isAlive()
+        end
+
+        local function addConnection(connection)
+            if connection and type(connection.Disconnect) == "function" then
+                Runtime.Connections[#Runtime.Connections + 1] = connection
+            end
+            return connection
+        end
+
+        local Reconnect = {
+            On = false,
+            World = true,
+            Server = true,
+            Keep = false,
+            DelaySec = 5,
+            LoaderUrl = "https://raw.githubusercontent.com/farelfirmansyah323-dot/growbloxcit/main/ByteHub_Loader.lua",
+            Target = "",
+            LastWorld = "",
+            Last = nil,
+            LastAt = 0,
+            Busy = false,
+            Disconnecting = false,
+            Status = "Siap",
+        }
+
+        local CONFIG_KEYS = {
+            "On", "World", "Server", "Keep",
+            "DelaySec", "LoaderUrl", "Target",
+        }
+
+        if type(Bridge.registerConfig) == "function" then
+            local ok, err = Bridge.registerConfig("Reconnect", Reconnect, CONFIG_KEYS)
+            if not ok then
+                warn("[ByteHub] Gagal mendaftarkan konfigurasi Auto Reconnect: " .. tostring(err))
+            end
+        end
+
+        local HttpService = game:GetService("HttpService")
+        local TeleportService = game:GetService("TeleportService")
+        local GuiService = game:GetService("GuiService")
+        local CoreGui = game:GetService("CoreGui")
+        local Player = type(Bridge.getPlayer) == "function" and Bridge.getPlayer() or nil
+
+        local USER_ID = Player and Player.UserId or 0
+        local FOLDER = "ByteHub"
+        local PENDING_FILE = FOLDER .. "/reconnect_" .. tostring(USER_ID) .. ".json"
+        local TELEPORT_KEY = "ByteHub.AutoReconnect.v1"
+
+        local function notify(message, duration)
+            if type(Bridge.notify) == "function" then
+                pcall(Bridge.notify, "Auto Reconnect", tostring(message), duration or 3)
+            end
+        end
+
+        local function setStatus(message)
+            Reconnect.Status = tostring(message or "")
+            local text = ("Status: %s\nBerhasil reconnect: %d"):format(Reconnect.Status, Runtime.Count)
+            if Bridge.StatusLabel and type(Bridge.StatusLabel.Set) == "function" then
+                pcall(Bridge.StatusLabel.Set, Bridge.StatusLabel, text)
+            end
+        end
+
+        local function saveConfig()
+            if type(Bridge.autoSaveEnabled) == "function"
+                and Bridge.autoSaveEnabled()
+                and type(Bridge.saveConfig) == "function" then
+                pcall(Bridge.saveConfig, true)
+            end
+        end
+
+        local function normalizeWorld(value)
+            return tostring(value or ""):upper():gsub("[^A-Z0-9]", "")
+        end
+
+        local function targetWorld()
+            local requested = normalizeWorld(Reconnect.Target)
+            if requested ~= "" then return requested end
+            return normalizeWorld(Reconnect.LastWorld)
+        end
+
+        local function hasSavedActivity(saved)
+            if type(saved) ~= "table" then return false end
+            for _, key in ipairs({
+                "plant", "farm", "clear", "spam", "splice",
+                "pabrik", "build", "vend", "harvest",
+            }) do
+                if saved[key] == true then return true end
+            end
+            return false
+        end
+
+        local function captureSnapshot()
+            if type(Bridge.captureSnapshot) ~= "function" then return nil end
+            local ok, saved = pcall(Bridge.captureSnapshot)
+            if not ok or type(saved) ~= "table" then return nil end
+            if type(saved.world) ~= "string" or saved.world == "" then
+                saved.world = Bridge.getWorld()
+            end
+            return saved
+        end
+
+        local function ensureFolder()
+            if type(isfolder) == "function" and type(makefolder) == "function" then
+                local ok, exists = pcall(isfolder, FOLDER)
+                if ok and not exists then pcall(makefolder, FOLDER) end
+            end
+        end
+
+        local function savePending(world, activity)
+            world = normalizeWorld(world)
+            if world == "" then return false end
+
+            local payload = {
+                Schema = 1,
+                World = world,
+                Activity = type(activity) == "table" and activity or nil,
+                Settings = {
+                    On = Reconnect.On == true,
+                    World = Reconnect.World == true,
+                    Server = Reconnect.Server == true,
+                    Keep = Reconnect.Keep == true,
+                    DelaySec = tonumber(Reconnect.DelaySec) or 5,
+                    LoaderUrl = tostring(Reconnect.LoaderUrl or ""),
+                    Target = tostring(Reconnect.Target or ""),
+                },
+                UserId = USER_ID,
+                PlaceId = game.PlaceId,
+                CreatedAt = os.time(),
+            }
+
+            local fileSaved = false
+            if type(writefile) == "function" then
+                ensureFolder()
+                local ok = pcall(writefile, PENDING_FILE, HttpService:JSONEncode(payload))
+                fileSaved = ok
+            end
+
+            local teleportSaved = false
+            local okTeleport = pcall(function()
+                TeleportService:SetTeleportSetting(TELEPORT_KEY, payload)
+            end)
+            teleportSaved = okTeleport
+
+            return fileSaved or teleportSaved
+        end
+
+        local function clearPending()
+            if type(isfile) == "function" and type(delfile) == "function" then
+                local ok, exists = pcall(isfile, PENDING_FILE)
+                if ok and exists then pcall(delfile, PENDING_FILE) end
+            end
+            pcall(function()
+                TeleportService:SetTeleportSetting(TELEPORT_KEY, false)
+            end)
+        end
+
+        local function readPending()
+            local payload
+
+            if type(isfile) == "function" and type(readfile) == "function" then
+                local okExists, exists = pcall(isfile, PENDING_FILE)
+                if okExists and exists then
+                    local okRead, raw = pcall(readfile, PENDING_FILE)
+                    if okRead and type(raw) == "string" then
+                        local okDecode, decoded = pcall(HttpService.JSONDecode, HttpService, raw)
+                        if okDecode and type(decoded) == "table" then payload = decoded end
+                    end
+                end
+            end
+
+            if not payload then
+                local ok, data = pcall(function()
+                    return TeleportService:GetTeleportSetting(TELEPORT_KEY)
+                end)
+                if ok and type(data) == "table" then payload = data end
+            end
+
+            if type(payload) ~= "table"
+                or payload.Schema ~= 1
+                or tonumber(payload.UserId) ~= USER_ID
+                or normalizeWorld(payload.World) == ""
+                or (payload.PlaceId ~= nil and tonumber(payload.PlaceId) ~= game.PlaceId)
+                or os.time() - (tonumber(payload.CreatedAt) or 0) < 0
+                or os.time() - (tonumber(payload.CreatedAt) or 0) > 900 then
+                return nil
+            end
+
+            return payload
+        end
+
+        local function queueLoader()
+            local url = tostring(Reconnect.LoaderUrl or ""):gsub("^%s+", ""):gsub("%s+$", "")
+            if url == "" then
+                url = "https://raw.githubusercontent.com/farelfirmansyah323-dot/growbloxcit/main/ByteHub_Loader.lua"
+            end
+            if url == "" then
+                return false, "Loader URL kosong. Isi URL ByteHub_Loader.lua."
+            end
+            if not url:match("^https://") then
+                return false, "Loader URL harus menggunakan HTTPS."
+            end
+
+            local queueFunction = Env.queue_on_teleport
+                or Env.queueonteleport
+                or (Env.syn and Env.syn.queue_on_teleport)
+                or (Env.fluxus and Env.fluxus.queue_on_teleport)
+
+            if type(queueFunction) ~= "function" then
+                return false, "Executor tidak menyediakan queue_on_teleport."
+            end
+
+            local queuedSource = ([=[
+                if not game:IsLoaded() then game.Loaded:Wait() end
+                local loaderUrl = %q
+                local source
+                local ok, result = pcall(function() return game:HttpGet(loaderUrl) end)
+                if ok and type(result) == "string" then source = result end
+                if type(source) ~= "string" or source == "" then
+                    local env = (type(getgenv) == "function" and getgenv()) or _G
+                    local req = env.request or env.http_request
+                        or (env.syn and env.syn.request)
+                        or (env.http and env.http.request)
+                    if type(req) == "function" then
+                        local sent, response = pcall(req, { Url = loaderUrl, Method = "GET" })
+                        if sent and type(response) == "table" then
+                            source = response.Body or response.body
+                        end
+                    end
+                end
+                assert(type(source) == "string" and source ~= "", "ByteHub loader tidak dapat diunduh")
+                local compiler = loadstring or ((type(getgenv) == "function" and getgenv()) or _G).loadstring
+                assert(type(compiler) == "function", "loadstring tidak tersedia")
+                local fn, compileError = compiler(source, "ByteHub_Loader")
+                assert(fn, compileError)
+                fn()
+            ]=]):format(url)
+            local ok, result = pcall(queueFunction, queuedSource)
+            if not ok then return false, result end
+            if result == false then return false, "Executor menolak antrean loader." end
+            return true, result
+        end
+
+        local function waitForWorld(world, timeout)
+            local wanted = normalizeWorld(world)
+            local deadline = os.clock() + (timeout or 10)
+            while active() and os.clock() < deadline do
+                if normalizeWorld(Bridge.getWorld()) == wanted then return true end
+                task.wait(0.25)
+            end
+            return false
+        end
+
+        local function waitForWorldExit(timeout)
+            local deadline = os.clock() + (timeout or 6)
+            while active() and os.clock() < deadline do
+                if normalizeWorld(Bridge.getWorld()) == "" then return true end
+                task.wait(0.25)
+            end
+            return normalizeWorld(Bridge.getWorld()) == ""
+        end
+
+        local function resumeSaved(world, saved, reason)
+            if not waitForWorld(world, 10) then
+                return false, "World belum terdeteksi setelah masuk."
+            end
+
+            if type(Bridge.afterWorldEnter) == "function" then
+                pcall(Bridge.afterWorldEnter)
+            end
+
+            if hasSavedActivity(saved) and type(Bridge.resumeActivities) == "function" then
+                local ok, result, detail = pcall(Bridge.resumeActivities, saved)
+                if not ok then return false, tostring(result) end
+                if result == false then return false, tostring(detail or "Pemulihan aktivitas gagal.") end
+            end
+
+            clearPending()
+            Runtime.Count += 1
+            setStatus(reason .. ": berhasil masuk ke " .. world)
+            notify(reason .. ": kembali ke " .. world, 4)
+            return true
+        end
+
+        local function enterAndResume(world, saved, reason)
+            world = normalizeWorld(world)
+            if world == "" then return false, "World tujuan kosong." end
+
+            for attempt = 1, 3 do
+                if not active() then return false, "Modul dihentikan." end
+
+                local ok, err, hopping = Bridge.enterWorld(world)
+                if hopping == true then
+                    savePending(world, saved)
+                    local queued, queueError = queueLoader()
+                    setStatus("Transfer ke " .. world .. (queued and " sedang berjalan." or ". " .. tostring(queueError)))
+                    return true, "hopping"
+                end
+
+                if ok then
+                    local resumed, resumeError = resumeSaved(world, saved, reason)
+                    if resumed then return true end
+                    err = resumeError
+                end
+
+                setStatus(("Gagal masuk %s (%d/3): %s"):format(world, attempt, tostring(err)))
+                task.wait(math.max(2, Reconnect.DelaySec))
+            end
+
+            notify("Gagal masuk kembali ke " .. world, 5)
+            return false, "Percobaan masuk world habis."
+        end
+
+        local function getCurrentSnapshot()
+            local saved = Reconnect.Last
+            if type(saved) ~= "table" and Bridge.hasActivity() then
+                saved = captureSnapshot()
+            end
+            if type(saved) == "table" and (not saved.world or saved.world == "") then
+                saved.world = Bridge.getWorld()
+            end
+            return saved
+        end
+
+        local function onWorldClosed(message)
+            if not active() or not Reconnect.On or not Reconnect.World
+                or Reconnect.Busy or Reconnect.Disconnecting then
+                return
+            end
+
+            local guardMode = type(Bridge.getGuardMode) == "function" and Bridge.getGuardMode() or "idle"
+            if guardMode == "away" or guardMode == "out" then return end
+
+            local saved = getCurrentSnapshot()
+            local world = (saved and saved.world) or targetWorld()
+            world = normalizeWorld(world)
+            if world == "" then return end
+
+            Reconnect.Busy = true
+            task.spawn(function()
+                setStatus("Terlempar dari " .. world .. ". Menyiapkan reconnect...")
+                if saved and Bridge.hasActivity() then
+                    pcall(Bridge.stopActivities)
+                end
+
+                task.wait(math.max(1, tonumber(Reconnect.DelaySec) or 5))
+
+                if not active() or not Reconnect.On then
+                    Reconnect.Busy = false
+                    return
+                end
+
+                if normalizeWorld(Bridge.getWorld()) ~= "" then
+                    pcall(Bridge.leaveWorld)
+                    waitForWorldExit(6)
+                end
+
+                enterAndResume(world, saved, "World recovery")
+                Reconnect.Busy = false
+            end)
+        end
+
+        local function onServerDisconnect(message)
+            if not active() or not Reconnect.On or not Reconnect.Server
+                or Reconnect.Disconnecting then
+                return
+            end
+
+            Reconnect.Disconnecting = true
+            local saved = getCurrentSnapshot()
+            local world = normalizeWorld((saved and saved.world) or targetWorld())
+
+            if world ~= "" then
+                savePending(world, saved)
+            end
+
+            if saved and Bridge.hasActivity() then
+                pcall(Bridge.stopActivities)
+            end
+
+            local queued, queueError = queueLoader()
+            setStatus("Koneksi server terputus. Mencoba masuk kembali...")
+            if not queued then
+                notify("Reconnect loader: " .. tostring(queueError), 5)
+            end
+
+            task.spawn(function()
+                task.wait(math.max(1, tonumber(Reconnect.DelaySec) or 5))
+                local placeId = type(Bridge.getPlaceId) == "function" and Bridge.getPlaceId() or game.PlaceId
+
+                local startingJobId = game.JobId
+                for attempt = 1, 6 do
+                    if not active() then return end
+                    local ok, err = pcall(function()
+                        if Player then
+                            TeleportService:Teleport(placeId, Player)
+                        else
+                            TeleportService:Teleport(placeId)
+                        end
+                    end)
+
+                    if ok then
+                        setStatus(("Permintaan teleport dikirim (%d/6). Menunggu server..."):format(attempt))
+                    else
+                        setStatus(("Teleport gagal (%d/6): %s"):format(attempt, tostring(err)))
+                    end
+
+                    task.wait(12)
+                    if not active() then return end
+                    if game.JobId ~= startingJobId then return end
+                end
+
+                Reconnect.Disconnecting = false
+                setStatus("Reconnect server gagal. Coba masuk ulang secara manual.")
+            end)
+        end
+
+        local function bindDisconnectEvents()
+            pcall(function()
+                addConnection(GuiService.ErrorMessageChanged:Connect(function(message)
+                    if type(message) == "string" and message ~= "" then
+                        onServerDisconnect(message)
+                    end
+                end))
+            end)
+
+            pcall(function()
+                local promptGui = CoreGui:FindFirstChild("RobloxPromptGui")
+                local overlay = promptGui and promptGui:FindFirstChild("promptOverlay")
+                if overlay then
+                    addConnection(overlay.ChildAdded:Connect(function(child)
+                        if child and child.Name == "ErrorPrompt" then
+                            local message = ""
+                            pcall(function() message = GuiService:GetErrorMessage() end)
+                            onServerDisconnect(message ~= "" and message or "Error prompt muncul.")
+                        end
+                    end))
+                end
+            end)
+
+            if Player then
+                pcall(function()
+                    addConnection(Player.OnTeleport:Connect(function(state)
+                        if state == Enum.TeleportState.Started
+                            or state == Enum.TeleportState.InProgress
+                            or state == Enum.TeleportState.WaitingForServer then
+                            queueLoader()
+                        end
+                    end))
+                end)
+            end
+        end
+
+        local function reconnectNow()
+            if Reconnect.Busy then
+                setStatus("Proses reconnect sedang berjalan.")
+                return
+            end
+
+            local world = targetWorld()
+            if world == "" then
+                setStatus("World tujuan belum diketahui. Masuk ke world atau isi Target World.")
+                return
+            end
+
+            local saved = getCurrentSnapshot()
+            if saved and normalizeWorld(saved.world) ~= world then saved = nil end
+
+            Reconnect.Busy = true
+            task.spawn(function()
+                if Bridge.hasActivity() then pcall(Bridge.stopActivities) end
+                if normalizeWorld(Bridge.getWorld()) ~= "" then
+                    pcall(Bridge.leaveWorld)
+                    waitForWorldExit(6)
+                end
+                enterAndResume(world, saved, "Manual reconnect")
+                Reconnect.Busy = false
+            end)
+        end
+
+        local function buildUI()
+            local tab = Bridge.Tab
+            tab:Section({ Title = "WORLD RECOVERY" })
+
+            Runtime.Controls = Runtime.Controls or {}
+            Runtime.Controls.Master = tab:Toggle({
+                Title = "Auto Reconnect",
+                Desc = "Aktifkan pemulihan otomatis setelah keluar dari world atau server.",
+                Value = Reconnect.On,
+                Callback = function(value)
+                    Reconnect.On = value == true
+                    if not Reconnect.On then
+                        Reconnect.Busy = false
+                        Reconnect.Disconnecting = false
+                        clearPending()
+                    end
+                    saveConfig()
+                    setStatus(Reconnect.On and "Aktif" or "Nonaktif")
+                end,
+            })
+
+            Runtime.Controls.World = tab:Toggle({
+                Title = "Kicked from world",
+                Desc = "Masuk kembali ke world yang sama setelah world ditutup.",
+                Value = Reconnect.World,
+                Callback = function(value)
+                    Reconnect.World = value == true
+                    saveConfig()
+                end,
+            })
+
+            Runtime.Controls.Server = tab:Toggle({
+                Title = "Disconnected from server",
+                Desc = "Mencoba masuk kembali ke game setelah koneksi server terputus.",
+                Value = Reconnect.Server,
+                Callback = function(value)
+                    Reconnect.Server = value == true
+                    saveConfig()
+                end,
+            })
+
+            Runtime.Controls.Keep = tab:Toggle({
+                Title = "Always return to world",
+                Desc = "Kembali otomatis jika berada di menu pemilihan world.",
+                Value = Reconnect.Keep,
+                Callback = function(value)
+                    Reconnect.Keep = value == true
+                    saveConfig()
+                end,
+            })
+
+            Runtime.Controls.Target = tab:Input({
+                Title = "Target World",
+                Placeholder = "Kosongkan untuk world terakhir",
+                Value = Reconnect.Target,
+                Callback = function(value)
+                    Reconnect.Target = tostring(value or "")
+                    saveConfig()
+                end,
+            })
+
+            Runtime.Controls.Delay = tab:Slider({
+                Title = "Reconnect Delay (seconds)",
+                Value = { Min = 2, Max = 60, Default = math.clamp(tonumber(Reconnect.DelaySec) or 5, 2, 60) },
+                Step = 1,
+                Callback = function(value)
+                    Reconnect.DelaySec = math.clamp(math.floor(tonumber(value) or 5), 2, 60)
+                    saveConfig()
+                end,
+            })
+
+            Runtime.Controls.LoaderUrl = tab:Input({
+                Title = "Loader URL",
+                Placeholder = "Raw HTTPS URL ByteHub_Loader.lua",
+                Value = Reconnect.LoaderUrl,
+                Callback = function(value)
+                    Reconnect.LoaderUrl = tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                    saveConfig()
+                end,
+            })
+
+            tab:Button({
+                Title = "Rejoin World Now",
+                Desc = "Keluar dan masuk kembali ke world tujuan.",
+                ButtonText = "Rejoin",
+                Callback = reconnectNow,
+            })
+
+            tab:Section({ Title = "INFORMATION" })
+            if Bridge.StatusLabel and type(Bridge.StatusLabel.Set) == "function" then
+                setStatus("Siap. Auto Reconnect nonaktif.")
+            end
+        end
+
+        buildUI()
+        bindDisconnectEvents()
+
+        task.spawn(function()
+            local attempts = 0
+            while active() and not Runtime.WorldListenerActive and attempts < 30 do
+                attempts += 1
+                local connected, connectionOrError = false, nil
+
+                if type(Bridge.connectWorldClosed) == "function" then
+                    local ok, result, detail = pcall(Bridge.connectWorldClosed, onWorldClosed)
+                    if ok then
+                        connected, connectionOrError = result, detail
+                    else
+                        connectionOrError = result
+                    end
+                end
+
+                if connected then
+                    Runtime.WorldListenerActive = true
+                    if type(connectionOrError) == "table"
+                        and type(connectionOrError.Disconnect) == "function" then
+                        addConnection(connectionOrError)
+                    end
+                    setStatus("Siap. Listener world aktif.")
+                    return
+                end
+
+                setStatus("Menunggu referensi WorldClosed: " .. tostring(connectionOrError))
+                task.wait(2)
+            end
+
+            if active() and not Runtime.WorldListenerActive then
+                setStatus("Listener WorldClosed tidak ditemukan. Reconnect server tetap tersedia.")
+            end
+        end)
+
+        function Runtime.Shutdown()
+            if not Runtime.Active then return end
+            Runtime.Active = false
+            for _, connection in ipairs(Runtime.Connections) do
+                pcall(function() connection:Disconnect() end)
+            end
+            table.clear(Runtime.Connections)
+            Reconnect.On = false
+            Reconnect.Busy = false
+            Reconnect.Disconnecting = false
+            if Env.__ByteHubAutoReconnect == Runtime then
+                Env.__ByteHubAutoReconnect = nil
+            end
+        end
+
+        task.spawn(function()
+            local pending = readPending()
+
+            if pending and type(pending.Settings) == "table" then
+                local settings = pending.Settings
+                if settings.On ~= nil then Reconnect.On = settings.On == true end
+                if settings.World ~= nil then Reconnect.World = settings.World == true end
+                if settings.Server ~= nil then Reconnect.Server = settings.Server == true end
+                if settings.Keep ~= nil then Reconnect.Keep = settings.Keep == true end
+                if tonumber(settings.DelaySec) then
+                    Reconnect.DelaySec = math.clamp(math.floor(tonumber(settings.DelaySec)), 2, 60)
+                end
+                if type(settings.LoaderUrl) == "string" and settings.LoaderUrl ~= "" then
+                    Reconnect.LoaderUrl = settings.LoaderUrl
+                end
+                if type(settings.Target) == "string" then Reconnect.Target = settings.Target end
+
+                local controls = Runtime.Controls or {}
+                if controls.Master and controls.Master.Set then controls.Master:Set(Reconnect.On) end
+                if controls.World and controls.World.Set then controls.World:Set(Reconnect.World) end
+                if controls.Server and controls.Server.Set then controls.Server:Set(Reconnect.Server) end
+                if controls.Keep and controls.Keep.Set then controls.Keep:Set(Reconnect.Keep) end
+                if controls.Delay and controls.Delay.Set then controls.Delay:Set(Reconnect.DelaySec) end
+                if controls.LoaderUrl and controls.LoaderUrl.Set then controls.LoaderUrl:Set(Reconnect.LoaderUrl) end
+                if controls.Target and controls.Target.Set then controls.Target:Set(Reconnect.Target) end
+            end
+
+            if pending and Reconnect.On and active() then
+                Reconnect.Busy = true
+                local world = normalizeWorld(pending.World)
+                local saved = pending.Activity
+
+                setStatus("Menyiapkan pemulihan ke " .. world .. "...")
+                local current = normalizeWorld(Bridge.getWorld())
+
+                if current == world then
+                    resumeSaved(world, saved, "Server recovery")
+                else
+                    enterAndResume(world, saved, "Server recovery")
+                end
+
+                Reconnect.Busy = false
+            elseif pending and not Reconnect.On then
+                clearPending()
+            end
+
+            local outsideSince = nil
+            while active() do
+                task.wait(1)
+
+                local currentWorld = normalizeWorld(Bridge.getWorld())
+                if currentWorld ~= "" then
+                    Reconnect.LastWorld = currentWorld
+                end
+
+                if Bridge.hasActivity() then
+                    local snapshot = captureSnapshot()
+                    if snapshot then
+                        Reconnect.Last = snapshot
+                        Reconnect.LastAt = os.clock()
+                    end
+                elseif Reconnect.LastAt > 0 and os.clock() - Reconnect.LastAt > 3 then
+                    Reconnect.Last = nil
+                    Reconnect.LastAt = 0
+                end
+
+                if Reconnect.On and Reconnect.Keep and not Reconnect.Busy
+                    and not Reconnect.Disconnecting and currentWorld == "" then
+                    outsideSince = outsideSince or os.clock()
+                    local world = targetWorld()
+                    if world ~= "" and os.clock() - outsideSince >= math.max(8, Reconnect.DelaySec) then
+                        outsideSince = nil
+                        Reconnect.Busy = true
+                        enterAndResume(world, Reconnect.Last, "Auto return")
+                        Reconnect.Busy = false
+                    end
+                else
+                    outsideSince = nil
+                end
+
+                if Bridge.StatusLabel and Reconnect.Status then
+                    setStatus(Reconnect.Status)
+                end
+            end
+        end)
+
+        print("[ByteHub] Auto Reconnect module siap.")
+        return Runtime
+    end
+
+    local ok, err = pcall(startByteHubAutoReconnect)
+    if not ok then
+        warn("[ByteHub] Auto Reconnect gagal diinisialisasi: " .. tostring(err))
+        pcall(function()
+            pAutoReconnectStatus:Set("Auto Reconnect gagal dimuat: " .. tostring(err))
+        end)
+    end
+end
+
+
 task.delay(0.6, function()
 	if not gui.Parent then return end
 	notify("BYTEHUB v2", "Tekan " .. State.toggleKey.Name .. " untuk buka/tutup", 4, true)
