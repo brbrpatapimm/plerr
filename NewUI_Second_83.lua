@@ -1450,22 +1450,56 @@ end
 function UI.Dropdown(page, name, options, default, callback)
 	local emptyText = "Belum ada pilihan"
 	local onEmptyClick = nil
+	local multiSelect = false
 	if type(name) == "table" then
 		local o = name
 		name, options, default, callback = o.Name, o.Options, o.Default, o.Callback
 		emptyText = tostring(o.EmptyText or o.Placeholder or emptyText)
 		onEmptyClick = o.OnEmptyClick
+		multiSelect = o.MultiSelect == true or o.Multi == true
 	end
 	name = name or "Dropdown"
 	options = options or {}
+
+	local function copySelection(value)
+		local result = {}
+		if type(value) == "table" then
+			for _, item in ipairs(value) do result[#result + 1] = item end
+		end
+		return result
+	end
+
+	local function normalizeSelection(value)
+		local wanted = {}
+		if type(value) == "table" then
+			for _, item in ipairs(value) do
+				if type(item) == "string" then wanted[item] = true end
+			end
+		elseif type(value) == "string" and value ~= "" then
+			wanted[value] = true
+		end
+		local result = {}
+		for _, option in ipairs(options) do
+			if wanted[option] then result[#result + 1] = option end
+		end
+		return result
+	end
+
+	local current = multiSelect and normalizeSelection(default) or default
+	local open = false
+
+	local function displayText()
+		if multiSelect then
+			return #current > 0 and table.concat(current, ", ") or "Pilih fitur..."
+		end
+		return tostring(current or "Select...")
+	end
+
 	local f = cardFrame(page, 62, name)
 	text({
 		Parent = f, Text = name, Font = FONT.Med, TextSize = 13,
 		Position = UDim2.new(0, 16, 0, 10), Size = UDim2.new(1, -32, 0, 18),
 	})
-
-	local current = default
-	local open = false
 
 	local box = new("TextButton", {
 		Position = UDim2.new(0, 16, 0, 34), Size = UDim2.new(1, -32, 0, 24),
@@ -1473,11 +1507,10 @@ function UI.Dropdown(page, name, options, default, callback)
 		Parent = f,
 	}, { corner(7), stroke(Theme.Stroke, 1, 0.4) })
 	local boxLabel = text({
-		Parent = box, Text = tostring(default or "Select..."), TextSize = 12,
+		Parent = box, Text = displayText(), TextSize = 12,
 		TextColor3 = Theme.Text, TextTruncate = Enum.TextTruncate.AtEnd,
 		Position = UDim2.new(0, 10, 0, 0), Size = UDim2.new(1, -30, 1, 0),
 	})
-	-- caret (drawn)
 	local caret = new("Frame", {
 		AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -10, 0.5, 0),
 		Size = UDim2.new(0, 6, 0, 6), Rotation = 45,
@@ -1502,6 +1535,11 @@ function UI.Dropdown(page, name, options, default, callback)
 	local obj = {}
 	local optionButtons = {}
 
+	local function isSelected(option)
+		if multiSelect then return table.find(current, option) ~= nil end
+		return option == current
+	end
+
 	local function renderOptions()
 		for _, b in ipairs(optionButtons) do b:Destroy() end
 		table.clear(optionButtons)
@@ -1516,22 +1554,42 @@ function UI.Dropdown(page, name, options, default, callback)
 			table.insert(optionButtons, empty)
 			return
 		end
+
 		for i, opt in ipairs(options) do
+			local selected = isSelected(opt)
+			local optionText = multiSelect
+				and ((selected and "✓  " or "□  ") .. tostring(opt))
+				or tostring(opt)
 			local b = new("TextButton", {
 				Size = UDim2.new(1, -8, 0, 26), Position = UDim2.new(0, 4, 0, 0),
 				LayoutOrder = i, BackgroundColor3 = Theme.Element, BackgroundTransparency = 1,
-				AutoButtonColor = false, Text = tostring(opt), Font = FONT.Reg, TextSize = 12,
-				TextColor3 = (opt == current) and Theme.Accent or Theme.Text,
+				AutoButtonColor = false, Text = optionText, Font = FONT.Reg, TextSize = 12,
+				TextColor3 = selected and Theme.Accent or Theme.Text,
 				TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 81, Parent = listScroll,
 			}, { corner(6), new("UIPadding", { PaddingLeft = UDim.new(0, 8) }) })
 			b.MouseEnter:Connect(function() tween(b, TI.Fast, { BackgroundTransparency = 0.3 }) end)
 			b.MouseLeave:Connect(function() tween(b, TI.Fast, { BackgroundTransparency = 1 }) end)
 			b.MouseButton1Click:Connect(function()
-				current = opt
-				boxLabel.Text = tostring(opt)
-				obj:Close()
-				renderOptions()
-				if callback then executorEnv.__ByteHubDispatchUIChange(callback, opt, true) end
+				if multiSelect then
+					local index = table.find(current, opt)
+					if index then
+						table.remove(current, index)
+					else
+						current[#current + 1] = opt
+					end
+					current = normalizeSelection(current)
+					boxLabel.Text = displayText()
+					renderOptions()
+					if callback then
+						executorEnv.__ByteHubDispatchUIChange(callback, copySelection(current), true)
+					end
+				else
+					current = opt
+					boxLabel.Text = displayText()
+					obj:Close()
+					renderOptions()
+					if callback then executorEnv.__ByteHubDispatchUIChange(callback, opt, true) end
+				end
 			end)
 			table.insert(optionButtons, b)
 		end
@@ -1542,6 +1600,7 @@ function UI.Dropdown(page, name, options, default, callback)
 		list.Visible = false
 		caret.Rotation = 45
 	end
+
 	local function resizeList()
 		local ap = box.AbsolutePosition
 		local rowH = 30
@@ -1551,6 +1610,7 @@ function UI.Dropdown(page, name, options, default, callback)
 		list.Position = UDim2.fromOffset(ap.X, ap.Y + box.AbsoluteSize.Y + 4)
 		list.Size = UDim2.fromOffset(box.AbsoluteSize.X, 0)
 	end
+
 	function obj:Open()
 		if open then return end
 		open = true
@@ -1562,20 +1622,31 @@ function UI.Dropdown(page, name, options, default, callback)
 			task.spawn(onEmptyClick)
 		end
 	end
+
 	function obj:Set(value, silent)
-		current = value
-		boxLabel.Text = tostring(value or "Select...")
+		current = multiSelect and normalizeSelection(value) or value
+		boxLabel.Text = displayText()
 		if list.Visible then renderOptions() end
-		if not silent and callback then executorEnv.__ByteHubDispatchUIChange(callback, value, true) end
+		if not silent and callback then
+			local callbackValue = multiSelect and copySelection(current) or current
+			executorEnv.__ByteHubDispatchUIChange(callback, callbackValue, true)
+		end
 	end
-	function obj:Get() return current end
+
+	function obj:Get()
+		return multiSelect and copySelection(current) or current
+	end
+
 	function obj:SetEmptyText(value)
 		emptyText = tostring(value or "Belum ada pilihan")
 		if open then renderOptions() end
 	end
+
 	function obj:SetOptions(newOptions, preferred)
 		options = newOptions or {}
-		if preferred ~= nil then
+		if multiSelect then
+			current = normalizeSelection(preferred ~= nil and preferred or current)
+		elseif preferred ~= nil then
 			current = preferred
 		elseif current == nil or not table.find(options, current) then
 			local matched
@@ -1590,7 +1661,7 @@ function UI.Dropdown(page, name, options, default, callback)
 			end
 			current = matched or options[1]
 		end
-		boxLabel.Text = tostring(current or "Select...")
+		boxLabel.Text = displayText()
 		if open then
 			renderOptions()
 			resizeList()
@@ -6052,7 +6123,7 @@ for _, key in ipairs({ "__ByteHubOpus", "__GTFarm" }) do -- __GTFarm = nama vers
     G[key] = nil
 end
 local Session = {}
-Session.Build = "2026-11-21-pnb-direct-input-fallback-v88"
+Session.Build = "2026-11-21-cycle-reconnect-v89-worldfix"
 G.__ByteHubOpus = Session
 local function alive()
     return G.__ByteHubOpus == Session
@@ -20455,7 +20526,7 @@ local function safe(fn)
     if not ok then warn("[AutoFarm] " .. tostring(err)) end
 end
 
-local function controlProxy(api, isDropdown)
+local function controlProxy(api, isDropdown, isMultiSelect)
     api = api or {}
     return {
         _mono = api,
@@ -20475,7 +20546,7 @@ local function controlProxy(api, isDropdown)
         end,
         Select = function(_, v)
             if isDropdown and v ~= nil and api.Set then
-                if type(v) == "table" then v = v[1] end
+                if type(v) == "table" and not isMultiSelect then v = v[1] end
                 if v ~= nil then api:Set(v, true) end
             end
         end,
@@ -20537,15 +20608,17 @@ local function windTab(page, title)
     function tab:Dropdown(o)
         o = o or {}
         local values = o.Values or o.Options or {}
+        local multiSelect = o.MultiSelect == true or o.Multi == true
         local value = o.Value
-        if type(value) == "table" then value = value[1] end
+        if type(value) == "table" and not multiSelect then value = value[1] end
         return controlProxy(OuterUI.Dropdown(page, {
             Name = o.Title or "",
             Description = o.Desc,
             Options = values,
             Default = value,
+            MultiSelect = multiSelect,
             Callback = o.Callback,
-        }), true)
+        }), true, multiSelect)
     end
     function tab:Input(o)
         o = o or {}
@@ -22972,6 +23045,16 @@ loadConfig(true)
             Bridge = Bridge,
             Connections = {},
             Count = 0,
+            Controls = {},
+            Cycle = {
+                Token = 0,
+                Transitioning = false,
+                NextAt = 0,
+                CurrentFeature = nil,
+                PausedAt = nil,
+                RestartRequested = false,
+                StatusText = "Nonaktif",
+            },
         }
         Env.__ByteHubAutoReconnect = Runtime
 
@@ -22989,12 +23072,15 @@ loadConfig(true)
             return connection
         end
 
-        local DEFAULT_LOADER_URL = "https://raw.githubusercontent.com/brbrpatapimm/plerr/main/NewUI_Second_73.lua"
+        local DEFAULT_LOADER_URL = "https://raw.githubusercontent.com/brbrpatapimm/plerr/main/NewUI_Second_89.lua"
+        local PREVIOUS_LOADER_URL_V88 = "https://raw.githubusercontent.com/brbrpatapimm/plerr/main/NewUI_Second_88.lua"
+        local PREVIOUS_LOADER_URL_V73 = "https://raw.githubusercontent.com/brbrpatapimm/plerr/main/NewUI_Second_73.lua"
         local LEGACY_LOADER_URL = "https://raw.githubusercontent.com/farelfirmansyah323-dot/growbloxcit/main/ByteHub_Loader.lua"
 
         local function normalizeLoaderUrl(value)
             local url = tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
-            if url == "" or url == LEGACY_LOADER_URL then
+            if url == "" or url == LEGACY_LOADER_URL
+                or url == PREVIOUS_LOADER_URL_V88 or url == PREVIOUS_LOADER_URL_V73 then
                 return DEFAULT_LOADER_URL
             end
 
@@ -23029,11 +23115,48 @@ loadConfig(true)
             Busy = false,
             Disconnecting = false,
             Status = "Siap",
+            CycleOn = false,
+            CycleFeatures = {},
+            CycleIntervalMode = "5 Minutes",
+            CycleCustomMinutes = 5,
+            CycleIndex = 1,
+            CycleWorld = "",
         }
+
+        local CYCLE_FEATURES = { "Auto PnB", "Auto Plant", "Auto Harvest" }
+        local CYCLE_INTERVALS = { "5 Minutes", "10 Minutes", "15 Minutes", "30 Minutes", "Custom" }
+
+        local function normalizeCycleFeatures(values)
+            local selected = {}
+            if type(values) == "table" then
+                for _, value in ipairs(values) do
+                    if type(value) == "string" then selected[value] = true end
+                end
+            elseif type(values) == "string" then
+                selected[values] = true
+            end
+            local result = {}
+            for _, feature in ipairs(CYCLE_FEATURES) do
+                if selected[feature] then result[#result + 1] = feature end
+            end
+            return result
+        end
+
+        local function normalizeCycleInterval(value)
+            for _, option in ipairs(CYCLE_INTERVALS) do
+                if value == option then return option end
+            end
+            return "5 Minutes"
+        end
+
+        Reconnect.CycleFeatures = normalizeCycleFeatures(Reconnect.CycleFeatures)
+        Reconnect.CycleIntervalMode = normalizeCycleInterval(Reconnect.CycleIntervalMode)
+        Reconnect.CycleCustomMinutes = math.clamp(math.floor(tonumber(Reconnect.CycleCustomMinutes) or 5), 1, 1440)
 
         local CONFIG_KEYS = {
             "On", "World", "Server", "Keep",
             "DelaySec", "LoaderUrl", "Target",
+            "CycleOn", "CycleFeatures", "CycleIntervalMode", "CycleCustomMinutes", "CycleIndex", "CycleWorld",
         }
 
         if type(Bridge.registerConfig) == "function" then
@@ -23042,6 +23165,14 @@ loadConfig(true)
                 warn("[ByteHub] Gagal mendaftarkan konfigurasi Auto Reconnect: " .. tostring(err))
             end
         end
+
+        -- Config.add dapat memuat nilai lama setelah nilai default dibuat.
+        -- Normalisasi ulang agar UI dan scheduler menerima tipe/nilai yang valid.
+        Reconnect.CycleFeatures = normalizeCycleFeatures(Reconnect.CycleFeatures)
+        Reconnect.CycleIntervalMode = normalizeCycleInterval(Reconnect.CycleIntervalMode)
+        Reconnect.CycleCustomMinutes = math.clamp(math.floor(tonumber(Reconnect.CycleCustomMinutes) or 5), 1, 1440)
+        Reconnect.CycleIndex = math.max(1, math.floor(tonumber(Reconnect.CycleIndex) or 1))
+        Reconnect.CycleWorld = type(Reconnect.CycleWorld) == "string" and Reconnect.CycleWorld or ""
 
         local storedLoaderUrl = tostring(Reconnect.LoaderUrl or "")
         Reconnect.LoaderUrl = normalizeLoaderUrl(Reconnect.LoaderUrl)
@@ -23136,6 +23267,12 @@ loadConfig(true)
                     DelaySec = tonumber(Reconnect.DelaySec) or 5,
                     LoaderUrl = tostring(Reconnect.LoaderUrl or ""),
                     Target = tostring(Reconnect.Target or ""),
+                    CycleOn = Reconnect.CycleOn == true,
+                    CycleFeatures = normalizeCycleFeatures(Reconnect.CycleFeatures),
+                    CycleIntervalMode = normalizeCycleInterval(Reconnect.CycleIntervalMode),
+                    CycleCustomMinutes = math.clamp(math.floor(tonumber(Reconnect.CycleCustomMinutes) or 5), 1, 1440),
+                    CycleIndex = math.max(1, math.floor(tonumber(Reconnect.CycleIndex) or 1)),
+                    CycleWorld = tostring(Reconnect.CycleWorld or ""),
                 },
                 UserId = USER_ID,
                 PlaceId = game.PlaceId,
@@ -23392,6 +23529,360 @@ loadConfig(true)
             return false, "Percobaan masuk world habis."
         end
 
+        Runtime.Cycle.flagFor = function(feature)
+            if feature == "Auto PnB" then return "farm" end
+            if feature == "Auto Plant" then return "plant" end
+            if feature == "Auto Harvest" then return "harvest" end
+            return nil
+        end
+
+        Runtime.Cycle.features = function()
+            Reconnect.CycleFeatures = normalizeCycleFeatures(Reconnect.CycleFeatures)
+            return Reconnect.CycleFeatures
+        end
+
+        Runtime.Cycle.intervalSeconds = function()
+            local mode = normalizeCycleInterval(Reconnect.CycleIntervalMode)
+            if mode == "Custom" then
+                return math.clamp(math.floor(tonumber(Reconnect.CycleCustomMinutes) or 5), 1, 1440) * 60
+            end
+            local minutes = tonumber(mode:match("^(%d+)")) or 5
+            return minutes * 60
+        end
+
+        Runtime.Cycle.status = function(message)
+            if message then
+                Runtime.Cycle.StatusText = tostring(message)
+            elseif not Reconnect.CycleOn then
+                Runtime.Cycle.StatusText = "Nonaktif"
+            elseif Runtime.Cycle.Transitioning then
+                Runtime.Cycle.StatusText = "Menyiapkan rejoin berikutnya..."
+            elseif Runtime.Cycle.NextAt > 0 then
+                local left = math.max(0, math.ceil(Runtime.Cycle.NextAt - os.clock()))
+                local minutes = math.floor(left / 60)
+                local seconds = left % 60
+                Runtime.Cycle.StatusText = ("Menjalankan %s · rejoin dalam %02d:%02d"):format(
+                    tostring(Runtime.Cycle.CurrentFeature or "-"), minutes, seconds
+                )
+            else
+                Runtime.Cycle.StatusText = "Menunggu fitur aktif..."
+            end
+
+            local control = Runtime.Controls and Runtime.Controls.CycleStatus
+            if control and type(control.SetDesc) == "function" then
+                pcall(control.SetDesc, control, Runtime.Cycle.StatusText)
+            end
+        end
+
+        Runtime.Cycle.makeSnapshot = function(feature)
+            local ok, base = pcall(Bridge.captureSnapshot)
+            if not ok or type(base) ~= "table" then
+                return nil, "Snapshot aktivitas tidak tersedia."
+            end
+
+            local world = tostring(base.world or Bridge.getWorld() or "")
+            if world == "" then return nil, "Masuk ke world terlebih dahulu." end
+
+            local snapshot = {
+                world = world,
+                plant = false,
+                farm = false,
+                harvest = false,
+                plantSeedId = base.plantSeedId,
+                tx = tonumber(base.tx),
+                ty = tonumber(base.ty),
+            }
+
+            if feature == "Auto Plant" then
+                local seedId = tonumber(base.plantSeedId)
+                if not seedId then
+                    return nil, "Pilih seed Auto Plant terlebih dahulu sebelum mengaktifkan Cycle Reconnect."
+                end
+                snapshot.plant = true
+                snapshot.plantSeedId = seedId
+            elseif feature == "Auto PnB" then
+                local x = tonumber(base.pnbX) or tonumber(base.tx)
+                local y = tonumber(base.pnbY) or tonumber(base.ty)
+                if x == nil or y == nil then
+                    return nil, "Posisi Auto PnB belum terbaca. Masuk world dan pastikan karakter berada di area farm."
+                end
+                snapshot.farm = true
+                snapshot.pnbX, snapshot.pnbY = x, y
+                snapshot.tx, snapshot.ty = x, y
+            elseif feature == "Auto Harvest" then
+                snapshot.harvest = true
+            else
+                return nil, "Fitur Cycle Reconnect tidak dikenal: " .. tostring(feature)
+            end
+
+            return snapshot
+        end
+
+        Runtime.Cycle.isFeatureActive = function(feature)
+            local flag = Runtime.Cycle.flagFor(feature)
+            if not flag then return false end
+            local ok, saved = pcall(Bridge.captureSnapshot)
+            return ok and type(saved) == "table" and saved[flag] == true
+        end
+
+        Runtime.Cycle.waitFeature = function(feature, token, timeout)
+            local deadline = os.clock() + (timeout or 75)
+            while active() and Reconnect.CycleOn
+                and token == Runtime.Cycle.Token
+                and os.clock() < deadline do
+                if Runtime.Cycle.isFeatureActive(feature) then return true end
+                task.wait(0.5)
+            end
+            return false, "Fitur " .. tostring(feature) .. " belum aktif."
+        end
+
+        Runtime.Cycle.fail = function(token, message)
+            if token ~= Runtime.Cycle.Token then return end
+            Reconnect.CycleOn = false
+            Reconnect.Busy = false
+            Runtime.Cycle.Transitioning = false
+            Runtime.Cycle.NextAt = 0
+            Runtime.Cycle.PausedAt = nil
+            Runtime.Cycle.RestartRequested = false
+            saveConfig()
+            if Runtime.Controls.CycleMaster then
+                pcall(function() Runtime.Controls.CycleMaster:Set(false) end)
+            end
+            Runtime.Cycle.status("Gagal: " .. tostring(message))
+            notify("Cycle Reconnect", tostring(message), 6)
+        end
+
+        Runtime.Cycle.start = function(resetIndex)
+            if not active() then return false, "ByteHub belum siap." end
+
+            local features = Runtime.Cycle.features()
+            if #features == 0 then
+                return false, "Pilih minimal satu fitur di dropdown Cycle Features."
+            end
+            if normalizeWorld(Bridge.getWorld()) == "" then
+                return false, "Masuk ke world terlebih dahulu agar Cycle Reconnect mengetahui world tujuan."
+            end
+
+            if resetIndex then Reconnect.CycleIndex = 1 end
+            Reconnect.CycleIndex = math.clamp(
+                math.floor(tonumber(Reconnect.CycleIndex) or 1), 1, #features
+            )
+            Reconnect.CycleOn = true
+            Runtime.Cycle.Token += 1
+            local token = Runtime.Cycle.Token
+            Runtime.Cycle.Transitioning = true
+            Runtime.Cycle.NextAt = 0
+            Runtime.Cycle.PausedAt = nil
+            Runtime.Cycle.RestartRequested = false
+            saveConfig()
+            Runtime.Cycle.status("Menyiapkan " .. features[Reconnect.CycleIndex] .. "...")
+
+            task.spawn(function()
+                local feature = features[Reconnect.CycleIndex]
+                local guardMode = type(Bridge.getGuardMode) == "function" and Bridge.getGuardMode() or "idle"
+                if guardMode == "away" or guardMode == "out" or guardMode == "pause" or guardMode == "back" then
+                    Runtime.Cycle.fail(token, "Penjaga sedang dalam proses. Tunggu sampai status Guard kembali idle.")
+                    return
+                end
+
+                local snapshot, snapshotError = Runtime.Cycle.makeSnapshot(feature)
+                if not snapshot then
+                    Runtime.Cycle.fail(token, snapshotError)
+                    return
+                end
+                Reconnect.CycleWorld = snapshot.world
+
+                local stopCall, stopped, stopError = pcall(Bridge.stopActivities)
+                if not stopCall or stopped == false then
+                    Runtime.Cycle.fail(token, stopError or stopped or "Aktivitas sebelumnya gagal dihentikan.")
+                    return
+                end
+                task.wait(0.35)
+
+                if not Reconnect.CycleOn or token ~= Runtime.Cycle.Token then
+                    Runtime.Cycle.Transitioning = false
+                    Runtime.Cycle.status("Nonaktif")
+                    return
+                end
+
+                local resumeCall, resumed, resumeError = pcall(Bridge.resumeActivities, snapshot)
+                if not resumeCall or resumed == false then
+                    Runtime.Cycle.fail(token, resumeError or resumed or "Gagal memulai fitur pertama.")
+                    return
+                end
+
+                local started, startError = Runtime.Cycle.waitFeature(feature, token, 75)
+                if token ~= Runtime.Cycle.Token then return end
+                if not started then
+                    Runtime.Cycle.fail(token, startError)
+                    return
+                end
+
+                Runtime.Cycle.CurrentFeature = feature
+                Runtime.Cycle.Transitioning = false
+                Runtime.Cycle.NextAt = os.clock() + Runtime.Cycle.intervalSeconds()
+                saveConfig()
+                Runtime.Cycle.status()
+                notify("Cycle Reconnect", feature .. " dimulai. Rejoin dalam " ..
+                    tostring(math.floor(Runtime.Cycle.intervalSeconds() / 60)) .. " menit.", 4)
+            end)
+            return true
+        end
+
+        Runtime.Cycle.advance = function()
+            if not active() or not Reconnect.CycleOn or Runtime.Cycle.Transitioning then return end
+            local features = Runtime.Cycle.features()
+            if #features == 0 then
+                Runtime.Cycle.fail(Runtime.Cycle.Token, "Tidak ada fitur yang dipilih.")
+                return
+            end
+
+            local currentIndex = math.clamp(math.floor(tonumber(Reconnect.CycleIndex) or 1), 1, #features)
+            local nextIndex = currentIndex % #features + 1
+            local nextFeature = features[nextIndex]
+            local token = Runtime.Cycle.Token
+
+            Reconnect.CycleIndex = nextIndex
+            Runtime.Cycle.Transitioning = true
+            Runtime.Cycle.NextAt = 0
+            Reconnect.Busy = true
+            saveConfig()
+            Runtime.Cycle.status("Rejoin World Now → " .. nextFeature)
+
+            task.spawn(function()
+                local snapshot, snapshotError = Runtime.Cycle.makeSnapshot(nextFeature)
+                if not snapshot then
+                    Reconnect.Busy = false
+                    Runtime.Cycle.fail(token, snapshotError)
+                    return
+                end
+                local world = tostring(Reconnect.CycleWorld or snapshot.world or "")
+                if normalizeWorld(world) == "" then
+                    Reconnect.Busy = false
+                    Runtime.Cycle.fail(token, "World cycle tidak diketahui.")
+                    return
+                end
+                Reconnect.CycleWorld = world
+
+                local stopCall, stopped, stopError = pcall(Bridge.stopActivities)
+                if not stopCall or stopped == false then
+                    Reconnect.Busy = false
+                    Runtime.Cycle.fail(token, stopError or stopped or "Aktivitas sebelumnya gagal dihentikan.")
+                    return
+                end
+                task.wait(0.35)
+
+                local currentWorld = normalizeWorld(Bridge.getWorld())
+                if currentWorld ~= "" then
+                    local leaveCall, left, leaveError = pcall(Bridge.leaveWorld)
+                    if not leaveCall or not left then
+                        Reconnect.Busy = false
+                        Runtime.Cycle.fail(token, leaveError or left or "Gagal keluar dari world sebelum rejoin.")
+                        return
+                    end
+                    if not waitForWorldExit(8) then
+                        Reconnect.Busy = false
+                        Runtime.Cycle.fail(token, "World belum keluar setelah perintah rejoin.")
+                        return
+                    end
+                end
+
+                -- Jika toggle dimatikan saat proses keluar world, tetap masuk
+                -- kembali tetapi jangan mengaktifkan fitur berikutnya.
+                if not Reconnect.CycleOn or token ~= Runtime.Cycle.Token then
+                    snapshot.plant, snapshot.farm, snapshot.harvest = false, false, false
+                end
+
+                local enterCall, entered, detail = pcall(enterAndResume, world, snapshot, "Cycle Reconnect")
+                Reconnect.Busy = false
+                if not enterCall then
+                    entered, detail = false, tostring(entered)
+                end
+
+                if entered and detail == "hopping" then
+                    Runtime.Cycle.status("Berpindah server. Siklus dilanjutkan setelah loader aktif.")
+                    return
+                end
+                if not entered then
+                    Runtime.Cycle.fail(token, detail or "Gagal rejoin ke world.")
+                    return
+                end
+
+                if not Reconnect.CycleOn or token ~= Runtime.Cycle.Token then
+                    Runtime.Cycle.Transitioning = false
+                    Runtime.Cycle.NextAt = 0
+                    Runtime.Cycle.status("Nonaktif")
+                    return
+                end
+
+                local started, startError = Runtime.Cycle.waitFeature(nextFeature, token, 90)
+                if not started then
+                    Runtime.Cycle.fail(token, startError)
+                    return
+                end
+
+                Runtime.Cycle.CurrentFeature = nextFeature
+                Runtime.Cycle.Transitioning = false
+                Runtime.Cycle.NextAt = os.clock() + Runtime.Cycle.intervalSeconds()
+                saveConfig()
+                Runtime.Cycle.status()
+                notify("Cycle Reconnect", nextFeature .. " dimulai. Rejoin berikutnya dalam " ..
+                    tostring(math.floor(Runtime.Cycle.intervalSeconds() / 60)) .. " menit.", 4)
+            end)
+        end
+
+        Runtime.Cycle.bootstrap = function(pending, pendingHopping)
+            if not Reconnect.CycleOn or not active() or pendingHopping then return end
+            local features = Runtime.Cycle.features()
+            if #features == 0 then
+                Reconnect.CycleOn = false
+                saveConfig()
+                if Runtime.Controls.CycleMaster then
+                    pcall(function() Runtime.Controls.CycleMaster:Set(false) end)
+                end
+                Runtime.Cycle.status("Nonaktif · pilih fitur terlebih dahulu")
+                return
+            end
+
+            Reconnect.CycleIndex = math.clamp(
+                math.floor(tonumber(Reconnect.CycleIndex) or 1), 1, #features
+            )
+            local feature = features[Reconnect.CycleIndex]
+            if Reconnect.CycleWorld == "" and type(pending) == "table"
+                and type(pending.Activity) == "table" then
+                Reconnect.CycleWorld = tostring(pending.Activity.world or "")
+            end
+            if Reconnect.CycleWorld == "" then
+                Reconnect.CycleWorld = tostring(Bridge.getWorld() or "")
+            end
+            local flag = Runtime.Cycle.flagFor(feature)
+            local pendingMatches = type(pending) == "table"
+                and type(pending.Activity) == "table"
+                and flag ~= nil and pending.Activity[flag] == true
+
+            if pendingMatches then
+                Runtime.Cycle.Token += 1
+                local token = Runtime.Cycle.Token
+                Runtime.Cycle.Transitioning = true
+                Runtime.Cycle.status("Memulihkan " .. feature .. " setelah rejoin...")
+                task.spawn(function()
+                    local started = Runtime.Cycle.waitFeature(feature, token, 90)
+                    if token ~= Runtime.Cycle.Token then return end
+                    if not started then
+                        Runtime.Cycle.Transitioning = false
+                        Runtime.Cycle.start(false)
+                        return
+                    end
+                    Runtime.Cycle.CurrentFeature = feature
+                    Runtime.Cycle.Transitioning = false
+                    Runtime.Cycle.NextAt = os.clock() + Runtime.Cycle.intervalSeconds()
+                    Runtime.Cycle.status()
+                end)
+            else
+                Runtime.Cycle.start(false)
+            end
+        end
+
         local function getCurrentSnapshot()
             local saved = Reconnect.Last
             if type(saved) ~= "table" and Bridge.hasActivity() then
@@ -23404,7 +23895,7 @@ loadConfig(true)
         end
 
         local function onWorldClosed(message)
-            if not active() or not Reconnect.On or not Reconnect.World
+            if not active() or not ((Reconnect.On and Reconnect.World) or Reconnect.CycleOn)
                 or Reconnect.Busy or Reconnect.Disconnecting then
                 return
             end
@@ -23426,8 +23917,9 @@ loadConfig(true)
 
                 task.wait(math.max(1, tonumber(Reconnect.DelaySec) or 5))
 
-                if not active() or not Reconnect.On then
+                if not active() or not (Reconnect.On or Reconnect.CycleOn) then
                     Reconnect.Busy = false
+                    Runtime.Cycle.Transitioning = false
                     return
                 end
 
@@ -23436,13 +23928,46 @@ loadConfig(true)
                     waitForWorldExit(6)
                 end
 
-                enterAndResume(world, saved, "World recovery")
+                if Reconnect.CycleOn then
+                    Runtime.Cycle.Transitioning = true
+                    Runtime.Cycle.NextAt = 0
+                end
+
+                local entered, detail = enterAndResume(world, saved, "World recovery")
                 Reconnect.Busy = false
+
+                if Reconnect.CycleOn and entered and detail ~= "hopping" then
+                    local features = Runtime.Cycle.features()
+                    local index = math.clamp(math.floor(tonumber(Reconnect.CycleIndex) or 1), 1, math.max(#features, 1))
+                    local feature = features[index]
+                    local token = Runtime.Cycle.Token
+                    if feature then
+                        task.spawn(function()
+                            local started, startError = Runtime.Cycle.waitFeature(feature, token, 90)
+                            if token ~= Runtime.Cycle.Token or not Reconnect.CycleOn then return end
+                            if not started then
+                                Runtime.Cycle.fail(token, startError)
+                                return
+                            end
+                            Runtime.Cycle.CurrentFeature = feature
+                            Runtime.Cycle.Transitioning = false
+                            Runtime.Cycle.NextAt = os.clock() + Runtime.Cycle.intervalSeconds()
+                            Runtime.Cycle.status()
+                        end)
+                    else
+                        Runtime.Cycle.Transitioning = false
+                        Runtime.Cycle.status("Menunggu pilihan fitur Cycle Reconnect.")
+                    end
+                elseif Reconnect.CycleOn and entered and detail == "hopping" then
+                    Runtime.Cycle.status("Berpindah server. Siklus dilanjutkan setelah loader aktif.")
+                else
+                    Runtime.Cycle.Transitioning = false
+                end
             end)
         end
 
         local function onServerDisconnect(message)
-            if not active() or not Reconnect.On or not Reconnect.Server
+            if not active() or not ((Reconnect.On and Reconnect.Server) or Reconnect.CycleOn)
                 or Reconnect.Disconnecting then
                 return
             end
@@ -23642,6 +24167,105 @@ loadConfig(true)
                 end,
             })
 
+            tab:Section({ Title = "CYCLE RECONNECT" })
+
+            Runtime.Controls.CycleFeatures = tab:Dropdown({
+                Title = "Cycle Features",
+                Desc = "Pilih satu atau beberapa fitur Auto Farm yang dijalankan bergantian.",
+                Values = CYCLE_FEATURES,
+                Value = Reconnect.CycleFeatures,
+                MultiSelect = true,
+                Callback = function(values)
+                    Reconnect.CycleFeatures = normalizeCycleFeatures(values)
+                    Reconnect.CycleIndex = 1
+                    saveConfig()
+
+                    if #Reconnect.CycleFeatures == 0 and Reconnect.CycleOn then
+                        Reconnect.CycleOn = false
+                        Runtime.Cycle.NextAt = 0
+                        Runtime.Cycle.RestartRequested = false
+                        if Runtime.Controls.CycleMaster then
+                            pcall(function() Runtime.Controls.CycleMaster:Set(false) end)
+                        end
+                        Runtime.Cycle.status("Nonaktif · pilih minimal satu fitur")
+                    elseif Reconnect.CycleOn then
+                        Runtime.Cycle.RestartRequested = true
+                    end
+                end,
+            })
+
+            Runtime.Controls.CycleInterval = tab:Dropdown({
+                Title = "Cycle Interval",
+                Desc = "Durasi setiap fitur sebelum Rejoin World Now.",
+                Values = CYCLE_INTERVALS,
+                Value = Reconnect.CycleIntervalMode,
+                Callback = function(value)
+                    if type(value) == "table" then value = value[1] end
+                    Reconnect.CycleIntervalMode = normalizeCycleInterval(value)
+                    if Reconnect.CycleOn and Runtime.Cycle.NextAt > 0 then
+                        Runtime.Cycle.NextAt = os.clock() + Runtime.Cycle.intervalSeconds()
+                    end
+                    saveConfig()
+                    Runtime.Cycle.status()
+                end,
+            })
+
+            Runtime.Controls.CycleCustomMinutes = tab:Input({
+                Title = "Custom Minutes",
+                Placeholder = "Contoh: 45",
+                Value = tostring(Reconnect.CycleCustomMinutes),
+                Live = false,
+                Callback = function(value)
+                    local parsed = tonumber(value)
+                    if not parsed or parsed < 1 then
+                        notify("Cycle Reconnect", "Custom Minutes harus berupa angka minimal 1.", 4)
+                        if Runtime.Controls.CycleCustomMinutes then
+                            Runtime.Controls.CycleCustomMinutes:Set(tostring(Reconnect.CycleCustomMinutes))
+                        end
+                        return
+                    end
+                    Reconnect.CycleCustomMinutes = math.clamp(math.floor(parsed), 1, 1440)
+                    if Runtime.Cycle.NextAt > 0 and Reconnect.CycleOn
+                        and Reconnect.CycleIntervalMode == "Custom" then
+                        Runtime.Cycle.NextAt = os.clock() + Runtime.Cycle.intervalSeconds()
+                    end
+                    saveConfig()
+                    Runtime.Cycle.status()
+                end,
+            })
+
+            Runtime.Controls.CycleMaster = tab:Toggle({
+                Title = "Cycle Reconnect",
+                Desc = "Jalankan fitur terpilih bergantian dan rejoin world setelah setiap interval.",
+                Value = Reconnect.CycleOn,
+                Callback = function(value)
+                    if value == true then
+                        local ok, err = Runtime.Cycle.start(true)
+                        if not ok then
+                            Reconnect.CycleOn = false
+                            if Runtime.Controls.CycleMaster then
+                                pcall(function() Runtime.Controls.CycleMaster:Set(false) end)
+                            end
+                            saveConfig()
+                            Runtime.Cycle.status("Tidak aktif")
+                            notify("Cycle Reconnect", err or "Tidak dapat memulai cycle.", 5)
+                        end
+                    else
+                        Reconnect.CycleOn = false
+                        Runtime.Cycle.NextAt = 0
+                        Runtime.Cycle.RestartRequested = false
+                        Runtime.Cycle.PausedAt = nil
+                        saveConfig()
+                        Runtime.Cycle.status("Nonaktif · fitur yang sedang berjalan tidak dihentikan")
+                    end
+                end,
+            })
+
+            Runtime.Controls.CycleStatus = tab:Paragraph({
+                Title = "Cycle Status",
+                Desc = Runtime.Cycle.StatusText,
+            })
+
             tab:Button({
                 Title = "Rejoin World Now",
                 Desc = "Keluar dan masuk kembali ke world tujuan.",
@@ -23723,6 +24347,22 @@ loadConfig(true)
                     Reconnect.LoaderUrl = normalizeLoaderUrl(settings.LoaderUrl)
                 end
                 if type(settings.Target) == "string" then Reconnect.Target = settings.Target end
+                if settings.CycleOn ~= nil then Reconnect.CycleOn = settings.CycleOn == true end
+                if type(settings.CycleFeatures) == "table" then
+                    Reconnect.CycleFeatures = normalizeCycleFeatures(settings.CycleFeatures)
+                end
+                if type(settings.CycleIntervalMode) == "string" then
+                    Reconnect.CycleIntervalMode = normalizeCycleInterval(settings.CycleIntervalMode)
+                end
+                if tonumber(settings.CycleCustomMinutes) then
+                    Reconnect.CycleCustomMinutes = math.clamp(math.floor(tonumber(settings.CycleCustomMinutes)), 1, 1440)
+                end
+                if tonumber(settings.CycleIndex) then
+                    Reconnect.CycleIndex = math.max(1, math.floor(tonumber(settings.CycleIndex)))
+                end
+                if type(settings.CycleWorld) == "string" then
+                    Reconnect.CycleWorld = settings.CycleWorld
+                end
 
                 local controls = Runtime.Controls or {}
                 if controls.Master and controls.Master.Set then controls.Master:Set(Reconnect.On) end
@@ -23732,9 +24372,16 @@ loadConfig(true)
                 if controls.Delay and controls.Delay.Set then controls.Delay:Set(Reconnect.DelaySec) end
                 if controls.LoaderUrl and controls.LoaderUrl.Set then controls.LoaderUrl:Set(Reconnect.LoaderUrl) end
                 if controls.Target and controls.Target.Set then controls.Target:Set(Reconnect.Target) end
+                if controls.CycleMaster and controls.CycleMaster.Set then controls.CycleMaster:Set(Reconnect.CycleOn) end
+                if controls.CycleFeatures and controls.CycleFeatures.Set then controls.CycleFeatures:Set(Reconnect.CycleFeatures) end
+                if controls.CycleInterval and controls.CycleInterval.Set then controls.CycleInterval:Set(Reconnect.CycleIntervalMode) end
+                if controls.CycleCustomMinutes and controls.CycleCustomMinutes.Set then
+                    controls.CycleCustomMinutes:Set(tostring(Reconnect.CycleCustomMinutes))
+                end
             end
 
-            if pending and Reconnect.On and active() then
+            local pendingHopping = false
+            if pending and (Reconnect.On or Reconnect.CycleOn) and active() then
                 Reconnect.Busy = true
                 local world = normalizeWorld(pending.World)
                 local saved = pending.Activity
@@ -23745,12 +24392,17 @@ loadConfig(true)
                 if current == world then
                     resumeSaved(world, saved, "Server recovery")
                 else
-                    enterAndResume(world, saved, "Server recovery")
+                    local entered, detail = enterAndResume(world, saved, "Server recovery")
+                    pendingHopping = entered == true and detail == "hopping"
                 end
 
                 Reconnect.Busy = false
-            elseif pending and not Reconnect.On then
+            elseif pending and not Reconnect.On and not Reconnect.CycleOn then
                 clearPending()
+            end
+
+            if Reconnect.CycleOn and active() and not pendingHopping then
+                Runtime.Cycle.bootstrap(pending, false)
             end
 
             local outsideSince = nil
@@ -23785,6 +24437,41 @@ loadConfig(true)
                     end
                 else
                     outsideSince = nil
+                end
+
+                if Reconnect.CycleOn and not Runtime.Cycle.Transitioning then
+                    local guardMode = type(Bridge.getGuardMode) == "function" and Bridge.getGuardMode() or "idle"
+                    local guardPaused = guardMode == "away" or guardMode == "out"
+                        or guardMode == "pause" or guardMode == "back"
+
+                    if guardPaused then
+                        Runtime.Cycle.PausedAt = Runtime.Cycle.PausedAt or os.clock()
+                    elseif Runtime.Cycle.PausedAt then
+                        if Runtime.Cycle.NextAt > 0 then
+                            Runtime.Cycle.NextAt += os.clock() - Runtime.Cycle.PausedAt
+                        end
+                        Runtime.Cycle.PausedAt = nil
+                    end
+
+                    if Runtime.Cycle.RestartRequested and not guardPaused then
+                        Runtime.Cycle.RestartRequested = false
+                        Runtime.Cycle.start(true)
+                    elseif not guardPaused then
+                        if Runtime.Cycle.NextAt <= 0 then
+                            local features = Runtime.Cycle.features()
+                            local index = math.clamp(math.floor(tonumber(Reconnect.CycleIndex) or 1), 1, math.max(#features, 1))
+                            local expected = features[index]
+                            if expected and Runtime.Cycle.isFeatureActive(expected) then
+                                Runtime.Cycle.CurrentFeature = expected
+                                Runtime.Cycle.NextAt = os.clock() + Runtime.Cycle.intervalSeconds()
+                            elseif expected and currentWorld ~= "" then
+                                Runtime.Cycle.start(false)
+                            end
+                        elseif os.clock() >= Runtime.Cycle.NextAt and not Reconnect.Busy then
+                            Runtime.Cycle.advance()
+                        end
+                    end
+                    Runtime.Cycle.status()
                 end
 
                 if Bridge.StatusLabel and Reconnect.Status then
