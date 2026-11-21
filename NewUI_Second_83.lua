@@ -6052,7 +6052,7 @@ for _, key in ipairs({ "__ByteHubOpus", "__GTFarm" }) do -- __GTFarm = nama vers
     G[key] = nil
 end
 local Session = {}
-Session.Build = "2026-11-21-startup-refactor-v82"
+Session.Build = "2026-11-21-autosupply-fix-v84"
 G.__ByteHubOpus = Session
 local function alive()
     return G.__ByteHubOpus == Session
@@ -9710,6 +9710,8 @@ local function findDropRefs(deep)
     if not Drops.list and deep and type(getgc) == "function" then
         local ok, objects = pcall(getgc, true)
         if not ok or type(objects) ~= "table" then ok, objects = pcall(getgc) end
+        local visited = 0
+        local budget = { next = os.clock() + 0.0015 }
         for _, v in pairs(ok and type(objects) == "table" and objects or {}) do
             if type(v) == "table" then
                 local e = rawget(v, 1)
@@ -9719,6 +9721,8 @@ local function findDropRefs(deep)
                     break
                 end
             end
+            visited += 1
+            Session.scanStep(budget, visited)
         end
     end
     return Drops.list ~= nil
@@ -14119,7 +14123,8 @@ do
         if not s or s.dead then return false end
         if not OrigIsDown then
             Supply.TakeStatus = "Kontrol gerak game (WorldMenu.isDown) tidak ketemu"
-            Supply.NextTry = 0
+            Supply.NextTry = os.clock() + 15
+            warn("[ByteHub] Auto Take Block: WorldMenu.isDown tidak ditemukan.")
             return false
         end
 
@@ -14128,9 +14133,20 @@ do
             pcall(findDropRefs, false)
             list = Drops.list
         end
+        if not list and os.clock() >= (Drops.DeepScanNextAt or 0) then
+            -- Deep scan hanya dilakukan ketika Auto Take Block benar-benar diminta,
+            -- bukan pada setiap frame collector. Hasilnya dibatasi jeda 30 detik.
+            Drops.DeepScanNextAt = os.clock() + 30
+            local scanOk, scanResult = pcall(findDropRefs, true)
+            if not scanOk then
+                warn("[ByteHub] Auto Take Block discovery: " .. tostring(scanResult))
+            end
+            list = Drops.list
+        end
         if not list then
             Supply.TakeStatus = "Daftar drop world belum terbaca, coba lagi"
-            Supply.NextTry = 0
+            Supply.NextTry = os.clock() + 5
+            warn("[ByteHub] Auto Take Block: daftar drop world belum ditemukan.")
             return false
         end
         if worldDropCount(id) <= 0 then
@@ -14258,20 +14274,42 @@ do
         local seed = seedOfBlock(block)
         if not seed then
             Supply.DropSeedStatus = "Block Auto Farm tidak punya seed"
+            Supply.DropNextTry = os.clock() + 15
+            Supply.logDropSeed(Supply.DropSeedStatus)
             return false
         end
         local n = invCount(seed)
         if n < 200 then return false end
         if Supply.DropSeedX < 0 or Supply.DropSeedY < 0 then
             Supply.DropSeedStatus = "Tile drop seed belum diatur"
+            Supply.DropNextTry = os.clock() + 15
+            Supply.logDropSeed(Supply.DropSeedStatus)
+            return false
+        end
+        if not OrigIsDown then
+            Supply.DropSeedStatus = "Kontrol gerak game (WorldMenu.isDown) tidak ditemukan"
+            Supply.logDropSeed(Supply.DropSeedStatus)
+            Supply.DropNextTry = os.clock() + 15
+            return false
+        end
+        local hud = Refs.Hud
+        if not hud or type(rawget(hud, "onDrop")) ~= "function" then
+            Supply.DropSeedStatus = "Fungsi drop game tidak ditemukan"
+            Supply.logDropSeed(Supply.DropSeedStatus)
+            Supply.DropNextTry = os.clock() + 15
             return false
         end
         local w = Refs.World
         local s = playerState()
-        if not w or not s or s.dead then return false end
+        if not w or not s or s.dead then
+            Supply.DropNextTry = os.clock() + 5
+            return false
+        end
         local x, y, facing = Supply.DropSeedX, Supply.DropSeedY, Supply.DropSeedFacing or 1
         if x < 0 or y < 0 or x >= w.w or y >= w.h or not openAt(x, y) or not realSupport(x, y) then
             Supply.DropSeedStatus = "Tile drop seed harus kosong & punya pijakan"
+            Supply.DropNextTry = os.clock() + 15
+            Supply.logDropSeed(Supply.DropSeedStatus)
             return false
         end
 
@@ -14288,17 +14326,19 @@ do
             Supply.Busy = false
             return false
         end
-        local got = 0
+        local got, failureStatus = 0, nil
         local okP, err = pcall(function()
             Supply.DropSeedStatus = ("Jalan ke tile drop seed (%d,%d)"):format(x, y)
             if not walkTo(x, y, 60, live) then
-                Supply.DropSeedStatus = "Tile drop seed tidak terjangkau"
+                failureStatus = "Tile drop seed tidak terjangkau"
+                Supply.DropSeedStatus = failureStatus
                 return
             end
             if not live() then return end
             Supply.DropSeedStatus = "Menghadap arah drop"
             if not faceDir(facing, live) then
-                Supply.DropSeedStatus = "Gagal menghadap arah drop, dicoba lagi nanti"
+                failureStatus = "Gagal menghadap arah drop, dicoba lagi nanti"
+                Supply.DropSeedStatus = failureStatus
                 return
             end
             -- fase drop: collect semua barang dimatikan 3 detik
@@ -14306,6 +14346,7 @@ do
             Supply.DropSeedStatus = "Buang " .. itemName(seed) .. " x" .. n
             local dropped, why = dropItems(seed, n, live, false)
             got = dropped
+            if why then failureStatus = "Drop gagal: " .. tostring(why) end
             if dropped > 0 then
                 local st = playerState()
                 if st then Pabrik.Zone = { world = Guard.worldName(), x = st.x, y = st.y - 0.475 } end
@@ -14315,7 +14356,10 @@ do
             Supply.BlockCollectUntil = math.max(Supply.BlockCollectUntil or 0, os.clock() + 3)
         end)
         releaseInput()
-        if not okP then warn("[ByteHub] Auto Drop Seed: " .. tostring(err)) end
+        if not okP then
+            failureStatus = tostring(err)
+            Supply.logDropSeed(failureStatus)
+        end
         if live() then returnHome(live) end
         State.DropPause = false
         Supply.Busy = false
@@ -14324,7 +14368,8 @@ do
             Supply.DropSeedStatus = ("Dibuang %s x%d"):format(itemName(seed), got)
             Supply.DropNextTry = os.clock() + 2
         else
-            Supply.DropSeedStatus = "Drop seed gagal, coba lagi 30 dtk"
+            Supply.DropSeedStatus = failureStatus or "Drop seed gagal, coba lagi 30 dtk"
+            Supply.logDropSeed(Supply.DropSeedStatus)
             Supply.DropNextTry = os.clock() + 30
         end
     end
@@ -14372,7 +14417,11 @@ do
                 -- Kalau stok masih > 0, Auto Farm jalan normal -- jangan bolak-balik
                 -- ambil drop (itu yang membuat karakter terlihat "bingung"). Tombol
                 -- "Ambil Sekarang" tetap boleh dipaksa oleh user.
-                local auto = (Supply.Need or (Supply.TakeId ~= nil and hasDrop)) and stock <= 0
+                local selectedId = tonumber(Supply.TakeId)
+                local farmId = farmBlock()
+                local selectedOther = selectedId ~= nil and selectedId > 0
+                    and selectedId ~= farmId and hasDrop
+                local auto = (Supply.Need and stock <= 0) or selectedOther
                 if Supply.Now or auto then
                     Supply.Now = false
                     takeDropStep(id)
@@ -14398,6 +14447,16 @@ do
         return Supply.TakeOn == true
     end
     Supply.faceDir = faceDir
+    function Supply.logDropSeed(message)
+        local now = os.clock()
+        if Supply.LastDropSeedWarn == message
+            and now - (Supply.LastDropSeedWarnAt or 0) < 15 then
+            return
+        end
+        Supply.LastDropSeedWarn = message
+        Supply.LastDropSeedWarnAt = now
+        warn("[ByteHub] Auto Drop Seed: " .. tostring(message))
+    end
 end
 
 task.spawn(function()
