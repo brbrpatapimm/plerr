@@ -33,7 +33,16 @@ local MarketplaceService = game:GetService("MarketplaceService")
 local HttpService = game:GetService("HttpService")
 
 local player = Players.LocalPlayer
-local playerGui = player:WaitForChild("PlayerGui")
+local playerGui
+local startClock = os.clock() + 15
+while not player and os.clock() < startClock do
+	task.wait(0.1)
+	player = Players.LocalPlayer
+end
+assert(player, "[ByteHub] LocalPlayer belum tersedia. Masuk ke game lalu execute ulang.")
+playerGui = player:FindFirstChild("PlayerGui") or player:WaitForChild("PlayerGui", 15)
+assert(playerGui, "[ByteHub] PlayerGui belum tersedia.")
+startClock = os.clock()
 
 local GUI_NAME = "ByteHubUI2"
 local CONFIG_FILE = "ByteConfig.json"
@@ -104,7 +113,6 @@ local State = {
 	window = { size = { 700, 460 }, pos = nil },
 }
 
-local startClock = os.clock()
 local activeConfirm
 local destroyUI
 local gui
@@ -6043,7 +6051,7 @@ for _, key in ipairs({ "__ByteHubOpus", "__GTFarm" }) do -- __GTFarm = nama vers
     G[key] = nil
 end
 local Session = {}
-Session.Build = "2026-11-18-autoharvest-obstacle-handling"
+Session.Build = "2026-11-21-startup-refactor-v82"
 G.__ByteHubOpus = Session
 local function alive()
     return G.__ByteHubOpus == Session
@@ -6167,10 +6175,19 @@ do
     end
     local function refreshIndex()
         indexed, seen, loaded = {}, {}, {}
+        Session.IndexVisited = 0
+        Session.IndexBudget = { next = os.clock() + 0.0015 }
+        Session.InitStep = "mengindeks modul client"
         for _, root in ipairs({ ReplicatedStorage, PlayerGui, LocalPlayer:FindFirstChild("PlayerScripts") or false }) do
             if root then
                 local ok, descendants = pcall(root.GetDescendants, root)
-                if ok and type(descendants) == "table" then for _, object in pairs(descendants) do add(object) end end
+                if ok and type(descendants) == "table" then
+                    for _, object in pairs(descendants) do
+                        add(object)
+                        Session.IndexVisited += 1
+                        Session.scanStep(Session.IndexBudget, Session.IndexVisited)
+                    end
+                end
             end
         end
         local used = {}
@@ -6183,6 +6200,8 @@ do
                         local object = isModule(value) and value or key
                         add(object)
                         if api == getloadedmodules and isModule(object) then loaded[object] = true end
+                        Session.IndexVisited += 1
+                        Session.scanStep(Session.IndexBudget, Session.IndexVisited)
                     end
                 end
             end
@@ -6223,7 +6242,7 @@ do
             tostring(game.PlaceId), tostring(game.PlaceVersion), table.concat(folders, ", "):sub(1, 900),
             #indexed, table.concat(names, ", "):sub(1, 1400), type(getloadedmodules), type(getmodules))
     end
-    local moduleDeadline = os.clock() + 30
+    local moduleDeadline = os.clock() + 8 -- pemindaian awal singkat; retry lanjutan tetap tersedia
     local structuralNames = { "ItemDB", "Inventory", "Net", "WorldMenu", "Roles", "Sfx" }
     local runtimeMatches, exportMatches, triedModules = {}, {}, {}
     local lastGC, runtimeComplete, exportsComplete = -math.huge, false, false
@@ -6522,6 +6541,8 @@ do
         runtimeMatches = {}
         runtimeComplete = true
         local visited = 0
+        Session.ScanBudget = { next = os.clock() + 0.0015 }
+        Session.InitStep = "memindai objek runtime"
         for _, value in pairs(objects) do
             if not alive() or os.clock() >= moduleDeadline then runtimeComplete = false break end
             if type(value) == "table" then
@@ -6529,8 +6550,9 @@ do
                 inspectValue(runtimeMatches, value)
             end
             visited += 1
-            if visited % 1000 == 0 then task.wait() end
+            Session.scanStep(Session.ScanBudget, visited)
         end
+        Session.InitStep = "pemindaian runtime selesai"
         lastGC = os.clock()
     end
     local function clientModule(object)
@@ -6636,7 +6658,7 @@ do
             end
             reason = ok and "hasil require bukan tabel" or tostring(result)
         end
-        local message = "[ByteHub] Modul " .. name .. ": " .. (reason or (required and "tidak ditemukan setelah pencarian 30 detik" or "tidak ditemukan"))
+        local message = "[ByteHub] Modul " .. name .. ": " .. (reason or (required and "tidak ditemukan setelah batas waktu pencarian" or "tidak ditemukan"))
         if required then
             Session.BootstrapReport = report()
             warn("[ByteHub] Struktur client: " .. Session.BootstrapReport)
@@ -6702,6 +6724,8 @@ do
         local scan = function()
             local gc = (getgc and getgc(true)) or nil
             if type(gc) ~= "table" then return nil end
+            Session.NetScanVisited = 0
+            Session.ScanBudget = { next = os.clock() + 0.0015 }
             for _, v in pairs(gc) do
                 if type(v) == "table" and type(rawget(v, "tile")) == "table" then
                     local t = rawget(v, "tile")
@@ -6709,6 +6733,8 @@ do
                         return v
                     end
                 end
+                Session.NetScanVisited += 1
+                Session.scanStep(Session.ScanBudget, Session.NetScanVisited)
             end
         end
         local okScan, found = pcall(scan)
@@ -22521,36 +22547,26 @@ return farmCleanup
 end
 
 --// START
--- Tampilkan shell UI sebelum discovery modul game dijalankan.
--- Proses discovery berjalan di task terpisah agar tidak menahan UI utama.
+-- Tampilkan UI utama sebelum discovery modul game dimulai.
 selectTab("Dashboard")
 setOpen(true)
 setAccentIndex(State.accentIndex)
 notify("BYTEHUB", "UI aktif. Menyiapkan fitur...", 3, true)
+task.wait() -- beri satu frame agar UI sempat dirender sebelum proses discovery.
 
-task.spawn(function()
-    -- Variabel lokal bootstrap ditempatkan di dalam fungsi ini agar tidak
-    -- menambah local register pada chunk utama yang sudah mendekati batas Luau.
-    local autoFarmMount = executorEnv.__mountAutoFarm
-    executorEnv.__mountAutoFarm = nil
-
+executorEnv.__autoFarmCleanup = (function()
     local ok, result = false, "Bootstrap Auto Farm tidak tersedia."
-    if type(autoFarmMount) == "function" then
-        ok, result = pcall(autoFarmMount, notify, UI)
+    if type(executorEnv.__mountAutoFarm) == "function" then
+        ok, result = pcall(executorEnv.__mountAutoFarm, notify, UI)
     end
+    executorEnv.__mountAutoFarm = nil
+    if ok and type(result) == "function" then return result end
+    warn("[AutoFarm] gagal dimuat: " .. tostring(result))
+    pcall(notify, "BYTEHUB", "UI aktif, tetapi Auto Farm gagal dimuat. Periksa console.", 6, true)
+    return nil
+end)()
 
-    if ok and type(result) == "function" then
-        executorEnv.__autoFarmCleanup = result
-        notify("BYTEHUB", "Komponen Auto Farm selesai dimuat.", 3, true)
-    else
-        executorEnv.__autoFarmCleanup = nil
-        warn("[AutoFarm] gagal dimuat: " .. tostring(result))
-        notify("BYTEHUB", "UI aktif, tetapi sebagian fitur gagal dimuat. Periksa console.", 5, true)
-    end
-
-    -- Config diterapkan setelah kontrol fitur selesai dibuat.
-    pcall(loadConfig, true)
-end)
+loadConfig(true)
 --// BYTEHUB AUTO RECONNECT (INTEGRATED)
 ;(function()
     local function startByteHubAutoReconnect()
@@ -22563,7 +22579,7 @@ end)
         end
 
         local Env = getEnvironment()
-        local bridgeDeadline = os.clock() + 60
+        local bridgeDeadline = os.clock() + 35
         local Bridge = Env.__ByteHubReconnectBridge
 
         while type(Bridge) ~= "table" and os.clock() < bridgeDeadline do
