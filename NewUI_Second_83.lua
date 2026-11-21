@@ -6052,7 +6052,7 @@ for _, key in ipairs({ "__ByteHubOpus", "__GTFarm" }) do -- __GTFarm = nama vers
     G[key] = nil
 end
 local Session = {}
-Session.Build = "2026-11-21-autosupply-fix-v84"
+Session.Build = "2026-11-21-worldmenu-retry-v85"
 G.__ByteHubOpus = Session
 local function alive()
     return G.__ByteHubOpus == Session
@@ -6269,6 +6269,21 @@ do
         end
         return entries >= 12 and named / entries >= 0.85 and metadata >= 8 and (seeds > 0 or solids >= 4)
     end
+    function Session.isMovementMenu(value)
+        if type(value) ~= "table" or type(rawget(value, "isDown")) ~= "function" then
+            return false
+        end
+
+        -- Client dapat mengganti nama atau susunan metadata WorldMenu.
+        local keys = rawget(value, "KEYS") or rawget(value, "keys") or rawget(value, "keyMap")
+        if type(keys) == "table" and next(keys) ~= nil then return true end
+
+        local mount = rawget(value, "mount")
+        local skins = rawget(value, "SKINS") or rawget(value, "skins")
+        local defaultSkin = rawget(value, "DEFAULT_SKIN") or rawget(value, "defaultSkin")
+        return type(mount) == "function" or type(skins) == "table" or defaultSkin ~= nil
+    end
+
     local function matches(name, value)
         if type(value) ~= "table" then return false end
         if name == "ItemDB" then return isItemDatabase(value) end
@@ -6280,10 +6295,7 @@ do
                 and type(rawget(value, "EVENTS")) == "table" and type(rawget(value, "punch")) == "table"
                 and type(rawget(rawget(value, "punch"), "send")) == "function"
         end
-        if name == "WorldMenu" then
-            return functions(value, { "mount", "isDown" }) and type(rawget(value, "SKINS")) == "table"
-                and type(rawget(value, "KEYS")) == "table" and type(rawget(value, "DEFAULT_SKIN")) == "number"
-        end
+        if name == "WorldMenu" then return Session.isMovementMenu(value) end
         if name == "Roles" then return functions(value, { "isDeveloper", "isModerator", "isUndercover" }) end
         if name == "Sfx" then return functions(value, { "play", "playAt", "loop" }) end
         return false
@@ -6516,7 +6528,7 @@ do
         local filters = {
             ItemDB = { 2, 4 }, Inventory = { "new", "add", "remove", "count", "used", "room", "select" },
             Net = { "call", "on", "worldTag", "CALLS", "EVENTS", "punch" },
-            WorldMenu = { "mount", "isDown", "SKINS", "KEYS", "DEFAULT_SKIN" },
+            WorldMenu = { "mount", "isDown", "SKINS", "KEYS", "DEFAULT_SKIN", "skins", "keys", "keyMap", "defaultSkin" },
             Roles = { "isDeveloper", "isModerator", "isUndercover" }, Sfx = { "play", "playAt", "loop" },
         }
         for _, name in ipairs(structuralNames) do
@@ -6670,6 +6682,58 @@ do
         -- Modul opsional tidak perlu dilaporkan: menunya tetap dimuat.
         return false, nil
     end
+    -- Pencarian WorldMenu dipisahkan dari ItemDB. ItemDB yang sudah siap
+    -- tidak boleh menghentikan retry pencarian kontrol gerak.
+    function Session.resolveMovementMenu()
+        if type(MenuModule) == "table" and type(rawget(MenuModule, "isDown")) == "function" then
+            MenuModOk = true
+            return true
+        end
+
+        GameGui = PlayerGui:FindFirstChild("GameGui") or GameGui
+        refreshIndex()
+
+        local object, reason = findModule(GameGui, "WorldMenu")
+        if object then
+            local ok, value = pcall(require, object)
+            if ok and type(value) == "table" and type(rawget(value, "isDown")) == "function" then
+                MenuModOk, MenuModule = true, value
+                Session.Modules.WorldMenu = object:GetFullName()
+                Session.ModuleScan.MovementSource = object:GetFullName()
+                Session.ModuleScan.MovementError = nil
+                return true
+            elseif not ok then
+                Session.ModuleScan.MovementError = tostring(value):sub(1, 180)
+            else
+                Session.ModuleScan.MovementError = "ModuleScript WorldMenu tidak memiliki isDown"
+            end
+        elseif reason then
+            Session.ModuleScan.MovementError = tostring(reason):sub(1, 180)
+        end
+
+        -- Ulangi pemindaian runtime dengan deadline baru jika modul baru
+        -- tersedia setelah startup awal.
+        moduleDeadline = os.clock() + 4
+        local value, moduleObject = structuralModule("WorldMenu", true)
+        if type(value) == "table" and type(rawget(value, "isDown")) == "function" then
+            MenuModOk, MenuModule = true, value
+            local sourceName = "runtime:WorldMenu"
+            if moduleObject then
+                local okName, fullName = pcall(function() return moduleObject:GetFullName() end)
+                if okName then sourceName = fullName end
+            end
+            Session.Modules.WorldMenu = sourceName
+            Session.ModuleScan.MovementSource = sourceName
+            Session.ModuleScan.MovementError = nil
+            return true
+        end
+
+        if not Session.ModuleScan.MovementError then
+            Session.ModuleScan.MovementError = "WorldMenu dengan fungsi isDown belum ditemukan"
+        end
+        return false
+    end
+
     function Session.resolveItems(quick)
         if Session.ItemDBSource then return true end
         if Session.ItemScan or Session.MovementScan then return false end
@@ -6695,7 +6759,10 @@ do
                 InventoryModule = inventory
             end
             if not NetOk then NetOk, Net = loadModule(Shared, "Net", false) end
-            if not MenuModOk then MenuModOk, MenuModule = loadModule(GameGui, "WorldMenu", false) end
+            if not MenuModOk or type(MenuModule) ~= "table" or type(rawget(MenuModule, "isDown")) ~= "function" then
+                pcall(Session.resolveMovementMenu)
+            end
+            if Session.bindMovementMenu then pcall(Session.bindMovementMenu) end
             if not RolesOk then RolesOk, RolesModule = loadModule(Shared, "Roles", false) end
         end)
         Session.ItemScan = false
@@ -10189,10 +10256,74 @@ local function isDownWrapper(saved, key, ...)
     return OrigIsDown(saved, key, ...)
 end
 
-if MenuModOk and type(MenuModule) == "table" and type(rawget(MenuModule, "isDown")) == "function" then
-    OrigIsDown = rawget(MenuModule, "isDown")
-    MenuModule.isDown = isDownWrapper
+function Session.bindMovementMenu()
+    if type(MenuModule) ~= "table" then return false end
+
+    local current = rawget(MenuModule, "isDown")
+    if type(current) ~= "function" then
+        local ok, value = pcall(function() return MenuModule.isDown end)
+        if ok and type(value) == "function" then current = value end
+    end
+    if type(current) ~= "function" then return false end
+
+    if current == isDownWrapper then
+        return type(OrigIsDown) == "function"
+    end
+
+    OrigIsDown = current
+    local assigned = pcall(function() MenuModule.isDown = isDownWrapper end)
+    if assigned then
+        Session.MovementInputReady = true
+        return true
+    end
+
+    -- Fallback untuk tabel modul yang readonly pada executor tertentu.
+    if type(hookfunction) == "function" then
+        local hooked, original = pcall(hookfunction, current, isDownWrapper)
+        if hooked and type(original) == "function" then
+            OrigIsDown = original
+            Session.MovementInputReady = true
+            return true
+        end
+    end
+
+    OrigIsDown = nil
+    Session.MovementInputReady = false
+    return false
 end
+
+pcall(Session.bindMovementMenu)
+
+-- WorldMenu bisa tersedia setelah UI selesai dibuat. Retry dibatasi dan berjalan
+-- di background agar tidak menahan UI atau melakukan scan setiap frame.
+task.spawn(function()
+    local attempts = 0
+    while alive() and not OrigIsDown and attempts < 10 do
+        attempts += 1
+
+        local found = false
+        if type(Session.resolveMovementMenu) == "function" then
+            local ok, result = pcall(Session.resolveMovementMenu)
+            found = ok and result == true
+            if not ok then
+                Session.ModuleScan.MovementError = tostring(result):sub(1, 180)
+            end
+        end
+
+        if found and Session.bindMovementMenu() then
+            print("[ByteHub] Kontrol gerak WorldMenu berhasil dihubungkan.")
+            return
+        end
+
+        task.wait(1.5)
+    end
+
+    if alive() and not OrigIsDown then
+        local detail = Session.ModuleScan and Session.ModuleScan.MovementError
+        warn("[ByteHub] Kontrol gerak belum tersedia: WorldMenu.isDown."
+            .. (detail and (" Detail: " .. tostring(detail)) or ""))
+    end
+end)
 
 -- Pasang walkspeed & fly tiap frame (game bisa menimpanya)
 table.insert(Connections, RunService.Heartbeat:Connect(function()
@@ -22582,9 +22713,11 @@ local function farmCleanup()
     pcall(nameRestore)
     pcall(setLite, false)
     pcall(unhookJammer)
-    if OrigIsDown and MenuModOk and rawget(MenuModule, "isDown") == isDownWrapper then
+    if OrigIsDown and MenuModOk and type(MenuModule) == "table"
+        and rawget(MenuModule, "isDown") == isDownWrapper then
         MenuModule.isDown = OrigIsDown
     end
+    Session.MovementInputReady = false
     if Refs.World then
         if Misc.Ghost then pcall(function() Refs.World.ghost = false end) end
         if Misc.Speed ~= 100 then pcall(function() Refs.World.speedScale = 1 end) end
