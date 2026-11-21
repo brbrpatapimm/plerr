@@ -6052,7 +6052,7 @@ for _, key in ipairs({ "__ByteHubOpus", "__GTFarm" }) do -- __GTFarm = nama vers
     G[key] = nil
 end
 local Session = {}
-Session.Build = "2026-11-21-worldmenu-exact-bind-v87"
+Session.Build = "2026-11-21-pnb-direct-input-fallback-v88"
 G.__ByteHubOpus = Session
 local function alive()
     return G.__ByteHubOpus == Session
@@ -10344,6 +10344,85 @@ local function isDownWrapper(saved, key, ...)
     return OrigIsDown(saved, key, ...)
 end
 
+-- Auto PnB fallback: gunakan adapter tombol executor yang sama dengan Auto Plant.
+-- Ini memungkinkan PnB bergerak walau WorldMenu.isDown tidak diekspos Delta.
+local PnbDirectInput = {
+    held = {},
+    warned = false,
+    modeLogged = false,
+}
+
+local function pnbDirectInputAvailable()
+    local runtime = executorEnv.__ByteHubAutoPlantRuntime
+    return type(runtime) == "table"
+        and type(runtime.setKey) == "function"
+        and type(runtime.keyMap) == "table"
+end
+
+local function pnbSetDirectKey(name, isDown)
+    local runtime = executorEnv.__ByteHubAutoPlantRuntime
+    if type(runtime) ~= "table" or type(runtime.setKey) ~= "function" then
+        return false
+    end
+    local ok, result = pcall(runtime.setKey, name, isDown)
+    return ok and result == true
+end
+
+local function pnbReleaseDirectInput()
+    for name in pairs(PnbDirectInput.held) do
+        pnbSetDirectKey(name, false)
+        PnbDirectInput.held[name] = nil
+    end
+end
+
+local function pnbSyncDirectInput()
+    -- Jika hook game tersedia, gunakan hook biasa dan jangan kirim input ganda.
+    if type(OrigIsDown) == "function" or not AutoInput.active then
+        pnbReleaseDirectInput()
+        return
+    end
+
+    if not pnbDirectInputAvailable() then
+        if not PnbDirectInput.warned then
+            PnbDirectInput.warned = true
+            warn("[ByteHub] Auto PnB: adapter input langsung executor tidak tersedia.")
+        end
+        return
+    end
+
+    if not PnbDirectInput.modeLogged then
+        PnbDirectInput.modeLogged = true
+        print("[ByteHub] Auto PnB menggunakan fallback input executor.")
+    end
+
+    -- Auto Plant telah mengalibrasi keyMap ini (Arrow/WASD/Space-S).
+    -- Gunakan map yang sama agar PnB mengikuti kontrol yang terbukti bekerja.
+    local desired = {
+        Left = AutoInput.left == true,
+        Right = AutoInput.right == true,
+        Up = AutoInput.jump == true,
+        Down = AutoInput.down == true,
+    }
+
+    for _, name in ipairs({ "Left", "Right", "Up", "Down" }) do
+        if desired[name] and not PnbDirectInput.held[name] then
+            if pnbSetDirectKey(name, true) then
+                PnbDirectInput.held[name] = true
+            elseif not PnbDirectInput.warned then
+                PnbDirectInput.warned = true
+                warn("[ByteHub] Auto PnB: executor menolak input tombol " .. name .. ".")
+            end
+        elseif not desired[name] and PnbDirectInput.held[name] then
+            pnbSetDirectKey(name, false)
+            PnbDirectInput.held[name] = nil
+        end
+    end
+end
+
+local function pnbMovementAvailable()
+    return type(OrigIsDown) == "function" or pnbDirectInputAvailable()
+end
+
 function Session.bindMovementMenu()
     if type(MenuModule) ~= "table" or not Session.isMovementMenu(MenuModule) then
         Session.MovementInputReady = false
@@ -10417,6 +10496,7 @@ end)
 
 -- Pasang walkspeed & fly tiap frame (game bisa menimpanya)
 table.insert(Connections, RunService.Heartbeat:Connect(function()
+    pnbSyncDirectInput()
     local w = Refs.World
     if not w or not alive() then return end
     -- AutoInput.speed diisi Auto Plant selama berjalan (di-nil-kan saat selesai).
@@ -11406,6 +11486,7 @@ end
 -- ---------- Gerakkan karakter ----------
 local function releaseInput()
     AutoInput.left, AutoInput.right, AutoInput.jump, AutoInput.down = false, false, false, false
+    pnbReleaseDirectInput()
 end
 
 -- Dedicated cancellation state for Auto Plant's bridge movement.
@@ -11882,7 +11963,7 @@ end
 function Drops.touchAll(tiles, hx, hy, live)
     live = live or alive
     local list = Drops.list
-    if not list or not OrigIsDown or not live() then return false end
+    if not list or not pnbMovementAvailable() or not live() then return false end
     local function dropsAt(t)
         for _, d in pairs(list) do
             if type(d) == "table" and type(d.x) == "number" and (d.n or 0) > 0 and d.armed ~= false
@@ -13550,7 +13631,7 @@ end
 local function walkTo(tx, ty, maxSec, live, route, allowLongFall, ignoreGlobalBadEdges)
     local w = Refs.World
     if not w then return false, "World belum tersedia" end
-    if not OrigIsDown then return false, "Kontrol gerak tidak tersedia" end
+    if not pnbMovementAvailable() then return false, "Kontrol gerak tidak tersedia" end
     if tx < 0 or ty < 0 or tx >= w.w or ty >= w.h then
         return false, ("Tujuan di luar world (%d,%d)"):format(tx, ty)
     end
@@ -14342,10 +14423,10 @@ do
     local function takeDropStep(id)
         local s = playerState()
         if not s or s.dead then return false end
-        if not OrigIsDown then
-            Supply.TakeStatus = "Kontrol gerak game (WorldMenu.isDown) tidak ketemu"
+        if not pnbMovementAvailable() then
+            Supply.TakeStatus = "Kontrol gerak tidak tersedia pada executor"
             Supply.NextTry = os.clock() + 15
-            warn("[ByteHub] Auto Take Block: WorldMenu.isDown tidak ditemukan.")
+            warn("[ByteHub] Auto Take Block: hook game dan input langsung executor tidak tersedia.")
             return false
         end
 
@@ -14507,8 +14588,8 @@ do
             Supply.logDropSeed(Supply.DropSeedStatus)
             return false
         end
-        if not OrigIsDown then
-            Supply.DropSeedStatus = "Kontrol gerak game (WorldMenu.isDown) tidak ditemukan"
+        if not pnbMovementAvailable() then
+            Supply.DropSeedStatus = "Kontrol gerak tidak tersedia pada executor"
             Supply.logDropSeed(Supply.DropSeedStatus)
             Supply.DropNextTry = os.clock() + 15
             return false
@@ -22808,6 +22889,7 @@ local function farmCleanup()
         pcall(rawset, MenuModule, "isDown", OrigIsDown)
     end
     Session.MovementInputReady = false
+    pcall(pnbReleaseDirectInput)
     if Refs.World then
         if Misc.Ghost then pcall(function() Refs.World.ghost = false end) end
         if Misc.Speed ~= 100 then pcall(function() Refs.World.speedScale = 1 end) end
