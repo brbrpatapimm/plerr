@@ -114,6 +114,25 @@ pcall(function()
 	if type(getgenv) == "function" then executorEnv = getgenv() end
 end)
 
+-- Jalankan callback UI, lalu antrekan autosave setelah perubahan selesai diterapkan.
+executorEnv.__ByteHubDispatchUIChange = function(callback, value, hasValue, isFinal)
+	task.spawn(function()
+		if type(callback) == "function" then
+			local ok, err
+			if hasValue and isFinal ~= nil then
+				ok, err = pcall(callback, value, isFinal)
+			elseif hasValue then
+				ok, err = pcall(callback, value)
+			else
+				ok, err = pcall(callback)
+			end
+			if not ok then warn("[ByteHub] UI callback gagal: " .. tostring(err)) end
+			local queue = executorEnv.__ByteHubQueueConfigSave
+			if type(queue) == "function" then pcall(queue) end
+		end
+	end)
+end
+
 --// HELPERS
 local connections = {}
 local accentCallbacks = {}
@@ -483,12 +502,14 @@ local function makeDraggable(handle)
 		end
 	end)
 	bind(UIS.InputEnded, function(input)
-		if isPress(input) then
+		if isPress(input) and dragging then
 			dragging = false
 			State.window.pos = {
 				main.Position.X.Scale, main.Position.X.Offset,
 				main.Position.Y.Scale, main.Position.Y.Offset,
 			}
+			local queue = executorEnv.__ByteHubQueueConfigSave
+			if type(queue) == "function" then pcall(queue) end
 		end
 	end)
 end
@@ -542,6 +563,8 @@ bind(UIS.InputEnded, function(input)
 	if isPress(input) and resizing then
 		resizing = false
 		State.window.size = { main.Size.X.Offset, main.Size.Y.Offset }
+		local queue = executorEnv.__ByteHubQueueConfigSave
+		if type(queue) == "function" then pcall(queue) end
 	end
 end)
 
@@ -1128,18 +1151,14 @@ function UI.Toggle(page, name, desc, default, callback)
 		name, desc, default, callback = o.Name, o.Description, o.Default, o.Callback
 	end
 	name = name or "Toggle"
-	local f = cardFrame(page, desc and 56 or 44, name .. " " .. (desc or ""))
+	-- ByteHub public UI: hide helper descriptions on every toggle.
+	-- The description is presentation-only; callbacks and values are unchanged.
+	desc = nil
+	local f = cardFrame(page, 44, name)
 	text({
 		Parent = f, Text = name, Font = FONT.Med, TextSize = 13,
-		Position = UDim2.new(0, 16, 0, desc and 10 or 0), Size = UDim2.new(1, -90, 0, desc and 18 or 44),
+		Position = UDim2.new(0, 16, 0, 0), Size = UDim2.new(1, -90, 0, 44),
 	})
-	if desc then
-		text({
-			Parent = f, Text = desc, TextSize = 11, TextColor3 = Theme.Sub,
-			Position = UDim2.new(0, 16, 0, 29), Size = UDim2.new(1, -90, 0, 16),
-			TextTruncate = Enum.TextTruncate.AtEnd,
-		})
-	end
 
 	local track = new("Frame", {
 		AnchorPoint = Vector2.new(1, 0.5),
@@ -1185,7 +1204,7 @@ function UI.Toggle(page, name, desc, default, callback)
 	function obj:Set(v, silent)
 		value = v and true or false
 		render(true)
-		if not silent then task.spawn(callback, value) end
+		if not silent then executorEnv.__ByteHubDispatchUIChange(callback, value, true) end
 	end
 	function obj:Get() return value end
 
@@ -1264,7 +1283,7 @@ function UI.Slider(page, name, min, max, default, step, callback, suffix)
 		local changed = v ~= value
 		value = v
 		render()
-		if changed and not silent then task.spawn(callback, value) end
+		if changed and not silent then executorEnv.__ByteHubDispatchUIChange(callback, value, true) end
 	end
 	function obj:Get() return value end
 
@@ -1277,6 +1296,7 @@ function UI.Slider(page, name, min, max, default, step, callback, suffix)
 	hit.InputBegan:Connect(function(input)
 		if isPress(input) then
 			dragging = true
+			executorEnv.__ByteHubSliderActive = true
 			bubble.Visible = true
 			tween(knob, TI.Fast, { Size = UDim2.new(0, 19, 0, 19) })
 			fromInput(input)
@@ -1288,8 +1308,11 @@ function UI.Slider(page, name, min, max, default, step, callback, suffix)
 	bind(UIS.InputEnded, function(input)
 		if isPress(input) and dragging then
 			dragging = false
+			executorEnv.__ByteHubSliderActive = false
 			bubble.Visible = false
 			tween(knob, TI.Fast, { Size = UDim2.new(0, 15, 0, 15) })
+			local queue = executorEnv.__ByteHubQueueConfigSave
+			if type(queue) == "function" then pcall(queue) end
 		end
 	end)
 
@@ -1299,18 +1322,14 @@ function UI.Slider(page, name, min, max, default, step, callback, suffix)
 end
 
 function UI.Button(page, name, desc, label, callback)
-	local f = cardFrame(page, desc and 56 or 44, name .. " " .. (desc or ""))
+	-- ByteHub public UI: hide helper descriptions on every button.
+	-- Button action and callback remain unchanged.
+	desc = nil
+	local f = cardFrame(page, 44, name)
 	text({
 		Parent = f, Text = name, Font = FONT.Med, TextSize = 13,
-		Position = UDim2.new(0, 16, 0, desc and 10 or 0), Size = UDim2.new(1, -140, 0, desc and 18 or 44),
+		Position = UDim2.new(0, 16, 0, 0), Size = UDim2.new(1, -140, 0, 44),
 	})
-	if desc then
-		text({
-			Parent = f, Text = desc, TextSize = 11, TextColor3 = Theme.Sub,
-			Position = UDim2.new(0, 16, 0, 29), Size = UDim2.new(1, -140, 0, 16),
-			TextTruncate = Enum.TextTruncate.AtEnd,
-		})
-	end
 
 	local b = new("TextButton", {
 		AnchorPoint = Vector2.new(1, 0.5),
@@ -1327,7 +1346,7 @@ function UI.Button(page, name, desc, label, callback)
 
 	b.MouseEnter:Connect(function() tween(b, TI.Fast, { BackgroundColor3 = Theme.Accent, TextColor3 = Theme.Bg }) end)
 	b.MouseLeave:Connect(function() tween(b, TI.Fast, { BackgroundColor3 = Theme.Bg, TextColor3 = Theme.Text }) end)
-	b.MouseButton1Click:Connect(function() task.spawn(callback) end)
+	b.MouseButton1Click:Connect(function() executorEnv.__ByteHubDispatchUIChange(callback, nil, false) end)
 	attachPressFX(b)
 	return b
 end
@@ -1369,9 +1388,11 @@ function UI.Label(page, content)
 end
 
 function UI.Input(page, name, placeholder, default, callback)
+	local live = type(callback) == "function"
 	if type(name) == "table" then
 		local o = name
 		name, placeholder, default, callback = o.Name, o.Placeholder, o.Default, o.Callback
+		live = o.Live ~= false and type(callback) == "function"
 	end
 	name = name or "Input"
 	local f = cardFrame(page, 62, name)
@@ -1391,15 +1412,26 @@ function UI.Input(page, name, placeholder, default, callback)
 		new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }),
 	})
 	local obj = {}
-	local function commit()
-		if callback then task.spawn(callback, box.Text) end
+	local lastCommitted = box.Text
+	local function commit(value, isFinal)
+		value = tostring(value == nil and box.Text or value)
+		local changed = value ~= lastCommitted
+		if not changed and not (live and isFinal) then return end
+		lastCommitted = value
+		if callback then executorEnv.__ByteHubDispatchUIChange(callback, value, true, isFinal == true) end
 	end
-	box.FocusLost:Connect(commit)
+	if live then
+		box:GetPropertyChangedSignal("Text"):Connect(function()
+			if box:IsFocused() then commit(box.Text, false) end
+		end)
+	end
+	box.FocusLost:Connect(function() commit(box.Text, true) end)
 	box.MouseEnter:Connect(function() tween(box, TI.Fast, { BackgroundColor3 = Theme.Element }) end)
 	box.MouseLeave:Connect(function() tween(box, TI.Fast, { BackgroundColor3 = Theme.Bg }) end)
 	function obj:Set(value, silent)
 		box.Text = tostring(value or "")
-		if not silent then commit() end
+		lastCommitted = box.Text
+		if not silent and callback then executorEnv.__ByteHubDispatchUIChange(callback, box.Text, true, true) end
 	end
 	function obj:Get() return box.Text end
 	function obj:SetDesc() end
@@ -1491,7 +1523,7 @@ function UI.Dropdown(page, name, options, default, callback)
 				boxLabel.Text = tostring(opt)
 				obj:Close()
 				renderOptions()
-				if callback then task.spawn(callback, opt) end
+				if callback then executorEnv.__ByteHubDispatchUIChange(callback, opt, true) end
 			end)
 			table.insert(optionButtons, b)
 		end
@@ -1526,7 +1558,7 @@ function UI.Dropdown(page, name, options, default, callback)
 		current = value
 		boxLabel.Text = tostring(value or "Select...")
 		if list.Visible then renderOptions() end
-		if not silent and callback then task.spawn(callback, value) end
+		if not silent and callback then executorEnv.__ByteHubDispatchUIChange(callback, value, true) end
 	end
 	function obj:Get() return current end
 	function obj:SetEmptyText(value)
@@ -1595,7 +1627,10 @@ function UI.Accents(page, list, callback)
 		}, { new("UICorner", { CornerRadius = UDim.new(1, 0) }), ring })
 		s.MouseButton1Click:Connect(function()
 			setAccentIndex(i)
-			if callback then callback(a) end
+			if callback then executorEnv.__ByteHubDispatchUIChange(callback, a, true) else
+				local queue = executorEnv.__ByteHubQueueConfigSave
+				if type(queue) == "function" then pcall(queue) end
+			end
 		end)
 		attachPressFX(s)
 		attachTooltip(s, a.name)
@@ -1646,7 +1681,7 @@ local function showConfirm(title, body, onYes)
 	local function close(result)
 		if activeConfirm and activeConfirm.overlay == overlay then activeConfirm = nil end
 		overlay:Destroy()
-		if result and onYes then task.spawn(onYes) end
+		if result and onYes then executorEnv.__ByteHubDispatchUIChange(onYes, nil, false) end
 	end
 
 	local noBtn = new("TextButton", {
@@ -2042,7 +2077,7 @@ UI.Button(pGeneral, "Delete Config", "Hapus config yang dipilih", "Delete", func
 		notify("Config", message or (ok and ("Config dihapus: " .. name) or "Gagal menghapus config"), 3, true)
 	end)
 end)
-executorEnv.__ByteHubConfigUI.autoSaveToggle = UI.Toggle(pGeneral, "Auto Save Config", "Simpan perubahan config aktif secara otomatis setiap 3 detik", Config.AutoSave, function(enabled)
+executorEnv.__ByteHubConfigUI.autoSaveToggle = UI.Toggle(pGeneral, "Auto Save Config", "Simpan otomatis 0,01 detik setelah pengaturan berubah", Config.AutoSave, function(enabled)
 	Config.AutoSave = enabled == true
 	local ok = Config.save(true)
 	if Config.refreshUI then Config.refreshUI() end
@@ -2098,6 +2133,8 @@ bind(UIS.InputBegan, function(input, gameProcessed)
 				notify("Keybind", "Toggle key: " .. State.toggleKey.Name, 2, true)
 			end
 			keybindBtn.Text = State.toggleKey.Name
+			local queue = executorEnv.__ByteHubQueueConfigSave
+			if type(queue) == "function" then pcall(queue) end
 		end
 		return
 	end
@@ -4075,7 +4112,6 @@ end
 
 plantState.controls.autoTakeSeed = UI.Toggle(pAuto, {
     Name = "Auto Take Seed",
-    Description = "Ambil seed dari world saat stok habis.",
     Default = true,
     Callback = function(enabled)
         plantState.autoTakeSeed = enabled and true or false
@@ -4112,7 +4148,6 @@ end
 
 autoToggle = UI.Toggle(pAuto, {
     Name = "Auto Plant",
-    Description = "Mulai atau hentikan penanaman.",
     Default = false,
     Callback = function(enabled)
         if enabled then
@@ -7950,7 +7985,7 @@ end
 -- CONFIG: Multi Config dalam satu file ByteConfig.json
 ---------------------------------------------------------------------
 -- Setiap preset menyimpan snapshot seluruh pengaturan yang terdaftar.
--- Auto Save memperbarui preset aktif setiap 3 detik jika ada perubahan.
+-- Auto Save mengantrekan penyimpanan 0,01 detik setelah perubahan UI; pemeriksaan 3 detik menjadi cadangan.
 -- Auto Load memuat preset terakhir yang aktif ketika script dijalankan.
 -- File lama dibaca satu kali untuk migrasi ke preset "Default".
 Config = {
@@ -8233,6 +8268,55 @@ do (function() -- scope terpisah agar tidak menambah local utama script
         return false
     end
 
+    function Config.requestSave()
+        if Config.AutoSave ~= true or Config.Paused then return false end
+        if not canFile then
+            Config.Status = "Executor tidak bisa simpan file"
+            return false
+        end
+
+        if not Config.CurrentName or type(Config.Configs[Config.CurrentName]) ~= "table" then
+            local name = Config.ActiveName
+            if type(name) ~= "string" or type(Config.Configs[name]) ~= "table" then
+                if Config._BlockDefaultAutoCreate then
+                    Config.Status = "Buat atau muat config terlebih dahulu"
+                    return false
+                end
+                name = "Default"
+                Config.Configs[name] = Config.Configs[name] or {}
+                Config.ActiveName = name
+            end
+            Config.CurrentName = name
+            Config.Data = Config.Configs[name]
+            Config.Found = true
+        end
+
+        -- Slider menyimpan sekali setelah drag selesai, bukan menulis file setiap frame.
+        if executorEnv.__ByteHubSliderActive == true then
+            return true
+        end
+
+        Config._SaveGeneration = (Config._SaveGeneration or 0) + 1
+        local generation = Config._SaveGeneration
+        Config._SaveQueued = true
+
+        task.delay(0.01, function()
+            if not alive() or generation ~= Config._SaveGeneration then return end
+            Config._SaveQueued = false
+            if Config.AutoSave ~= true or Config.Paused then return end
+            local ok = Config.save(false)
+            if ok then Config.refreshUI() end
+        end)
+        return true
+    end
+
+    executorEnv.__ByteHubQueueConfigSave = function()
+        if Config and type(Config.requestSave) == "function" then
+            return Config.requestSave()
+        end
+        return false
+    end
+
     function Config.load(name, silent)
         if type(name) ~= "string" or type(Config.Configs[name]) ~= "table" then
             return false, "Config tidak ditemukan"
@@ -8246,6 +8330,7 @@ do (function() -- scope terpisah agar tidak menambah local utama script
         Config.CurrentName = name
         Config.ActiveName = name
         Config.Data = Config.Configs[name]
+        Config._BlockDefaultAutoCreate = false
 
         for _, entry in ipairs(Config.List) do
             local saved = Config.Data[entry.name]
@@ -8307,6 +8392,7 @@ do (function() -- scope terpisah agar tidak menambah local utama script
         Config.ActiveName = name
         Config.Data = snapshot
         Config.Paused = false
+        Config._BlockDefaultAutoCreate = false
 
         local saved = Config.save(true)
         Config.refreshUI()
@@ -8322,6 +8408,9 @@ do (function() -- scope terpisah agar tidak menambah local utama script
         local wasCurrent = Config.CurrentName == name
         local wasActive = Config.ActiveName == name
         Config.Configs[name] = nil
+        if next(Config.Configs) == nil then
+            Config._BlockDefaultAutoCreate = true
+        end
 
         if wasCurrent then
             Config.CurrentName = nil
@@ -8385,7 +8474,7 @@ do (function() -- scope terpisah agar tidak menambah local utama script
             while alive() do
                 task.wait(3)
                 if Config.AutoSave and alive() then
-                    Config.save(false)
+                    Config.save(false) -- fallback untuk perubahan internal yang tidak berasal dari kontrol UI
                 end
             end
         end)
@@ -8458,7 +8547,7 @@ do
         pcall(teleport.SetTeleportSetting, teleport, key, {
             User = LocalPlayer.UserId, Saved = I18N.Saved, Ask = I18N.Ask, Chosen = I18N.Chosen,
         })
-        if Session.Ready then Config.save(true) else I18N.SavePending = true end
+        if Session.Ready then Config.requestSave() else I18N.SavePending = true end
     end
     function I18N.forget()
         pcall(teleport.SetTeleportSetting, teleport, key, false)
@@ -8988,19 +9077,6 @@ local function findRefs()
         end
     end
     return Refs.World ~= nil
-end
-
-local function refsText()
-    return "World: " .. (Refs.World and "OK" or "TIDAK")
-        .. " | Inventori: " .. (Refs.Inv and "OK" or "TIDAK")
-        .. " | setTile: " .. (Refs.SetTile and "OK" or "cadangan")
-        .. " | Posisi: " .. (Refs.State and "OK" or "cadangan")
-        .. " | Pukul: " .. (Refs.Punch and "OK" or "TIDAK")
-        .. " | Drop: " .. (Drops.list and "OK" or "TIDAK")
-        .. " | Pohon: " .. (Refs.Trees and "OK" or "TIDAK")
-        .. " | Pemain: " .. (Refs.Others and "OK" or "TIDAK")
-        .. " | Animasi: " .. (Anim.fn and "OK" or ("TIDAK" .. (Anim.BindReason and (" (" .. tostring(Anim.BindReason) .. ")") or "")))
-        .. " | Dropdown: " .. (UI.DropErr and ("ERROR " .. tostring(UI.DropErr)) or (UI.DropOk and "OK" or "-"))
 end
 
 ---------------------------------------------------------------------
@@ -14336,7 +14412,7 @@ do
         end
         AutoDrop.X, AutoDrop.Y, AutoDrop.World = x, y, world
         AutoDrop.Status = "Tile drop tersimpan"
-        Config.save(true)
+        Config.requestSave()
         return true
     end
 
@@ -20089,6 +20165,7 @@ local function windTab(page, title)
             Name = o.Title or "",
             Placeholder = o.Placeholder,
             Default = o.Value,
+            Live = o.Live ~= false,
             Callback = o.Callback,
         }))
     end
@@ -20348,6 +20425,8 @@ local function buildFarmGrid(page)
                 button.MouseButton1Click:Connect(function()
                     State.Offsets[key] = (not State.Offsets[key]) or nil
                     paint(key, true)
+                    local queue = executorEnv.__ByteHubQueueConfigSave
+                    if type(queue) == "function" then pcall(queue) end
                     if State.animations then
                         tween(scale, TI.Back, { Scale = State.Offsets[key] and 1.07 or 0.94 })
                         task.delay(0.09, function()
@@ -20416,6 +20495,8 @@ local function buildFarmGrid(page)
     clearButton.MouseButton1Click:Connect(function()
         table.clear(State.Offsets)
         paintAll(true)
+        local queue = executorEnv.__ByteHubQueueConfigSave
+        if type(queue) == "function" then pcall(queue) end
     end)
 
     local lastRunning = nil
@@ -21195,6 +21276,7 @@ do (function() -- fungsi sendiri: variabel di dalam tidak ikut batas 200 local
         end,
         saveConfig = function(force)
             if not alive() then return false end
+            if type(Config.requestSave) == "function" then return Config.requestSave() end
             return Config.save(force == true)
         end,
         autoSaveEnabled = function()
@@ -21325,7 +21407,7 @@ Config.add("Penjaga", Guard, { "On", "Who", "StopAll", "Leave", "AutoBack", "Bac
 do (function()
     local GuardTab = makeTab("Guard", "shield", "Setting")
     local function saveGuard()
-        if Session.Ready then Config.save(true) end
+        if Session.Ready then Config.requestSave() end
     end
 
     UI.GuardStatus = GuardTab:Paragraph({
@@ -21452,7 +21534,7 @@ end)() end
 do (function()
     local DiscordTab = makeTab("Discord", "message-circle", "Setting")
     local function saveDiscord()
-        if Session.Ready then Config.save(true) end
+        if Session.Ready then Config.requestSave() end
     end
 
     UI.HookStatus = DiscordTab:Paragraph({
@@ -21481,10 +21563,10 @@ do (function()
             Desc = "Discord channel > Edit Channel > Integrations > Webhooks > Copy Webhook URL.",
             Value = Hook.Url,
             Placeholder = "https://discord.com/api/webhooks/...",
-            Callback = function(value)
+            Callback = function(value, isFinal)
                 value = tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
                 Hook.Url = value
-                if value ~= "" and not Hook.valid(value) then
+                if isFinal and value ~= "" and not Hook.valid(value) then
                     notify("Discord", "URL webhook tidak valid.", 4)
                 end
                 saveDiscord()
@@ -21591,7 +21673,7 @@ do (function()
                 Supply.Need = false
                 Supply.NextTry = 0
                 if not on then Supply.TakeStatus = "-" end
-                if Session.Ready then Config.save(true) end
+                if Session.Ready then Config.requestSave() end
             end,
         })
     end)
@@ -21609,7 +21691,7 @@ do (function()
                     Supply.TakeId = nil
                     Supply.NextTry = 0
                     Supply.TakeStatus = "-"
-                    if Session.Ready then Config.save(true) end
+                    if Session.Ready then Config.requestSave() end
                     return
                 end
                 if id > 0 then
@@ -21619,7 +21701,7 @@ do (function()
                     -- pilih block = langsung aktifkan fitur
                     Supply.TakeOn = true
                     if UI.SupplyTakeToggle then pcall(function() UI.SupplyTakeToggle:Set(true) end) end
-                    if Session.Ready then Config.save(true) end
+                    if Session.Ready then Config.requestSave() end
                 end
             end,
         })
@@ -21636,7 +21718,7 @@ do (function()
                 Supply.NextTry = 0
                 Supply.TakeOn = true
                 if UI.SupplyTakeToggle then pcall(function() UI.SupplyTakeToggle:Set(true) end) end
-                if Session.Ready then Config.save(true) end
+                if Session.Ready then Config.requestSave() end
             end,
         })
     end)
@@ -21651,7 +21733,7 @@ do (function()
                 if on and (Supply.DropSeedX < 0 or Supply.DropSeedY < 0) then
                     notify("Auto Drop Seed", "Tile drop belum diatur. Tekan Set Tile dulu.", 5)
                 end
-                if Session.Ready then Config.save(true) end
+                if Session.Ready then Config.requestSave() end
             end,
         })
     end)
@@ -21677,7 +21759,7 @@ do (function()
                 Supply.DropSeedFacing = ((s.facing or 1) < 0) and -1 or 1
                 Supply.DropSeedStatus = ("Tile (%d,%d) arah %s"):format(x, y,
                     Supply.DropSeedFacing < 0 and "kiri" or "kanan")
-                if Session.Ready then Config.save(true) end
+                if Session.Ready then Config.requestSave() end
                 notify("Auto Drop Seed", Supply.DropSeedStatus, 4)
             end,
         })
@@ -21693,7 +21775,7 @@ do (function()
                 Supply.DropSeedOn = false
                 Supply.DropSeedStatus = "-"
                 if UI.SupplyDropToggle then pcall(function() UI.SupplyDropToggle:Set(false) end) end
-                if Session.Ready then Config.save(true) end
+                if Session.Ready then Config.requestSave() end
             end,
         })
     end)
@@ -21769,7 +21851,7 @@ safe(function()
         Callback = function(opt)
             if type(opt) == "table" then opt = opt[1] end
             State.Mode = opt
-            if Session.Ready then Config.save(true) end
+            if Session.Ready then Config.requestSave() end
         end,
     })
 end)
@@ -21870,7 +21952,7 @@ do (function()
                     return
                 end
                 State.WorldBreakId = id
-                if Session.Ready then Config.save(true) end
+                if Session.Ready then Config.requestSave() end
             end,
         })
     end)
@@ -21913,7 +21995,7 @@ do (function()
             Callback = function(on)
                 State.WorldBreakCollect = on
                 Drops.seen = nil
-                if Session.Ready then Config.save(true) end
+                if Session.Ready then Config.requestSave() end
             end,
         })
     end)
@@ -22008,7 +22090,7 @@ do (function()
                 if on and (Harvest.DropX < 0 or Harvest.DropY < 0) then
                     notify("Auto Drop", "Tile drop belum diatur. Tekan 'Set Tile Drop' dulu.", 5)
                 end
-                if Session.Ready then Config.save(true) end
+                if Session.Ready then Config.requestSave() end
             end,
         })
     end)
@@ -22025,7 +22107,7 @@ do (function()
                     Harvest.DropSeedStatus = "Tile drop belum diatur"
                     notify("Auto Drop Seed", "Tile drop belum diatur. Gunakan tombol 'Set Tile Drop' yang sama.", 5)
                 end
-                if Session.Ready then Config.save(true) end
+                if Session.Ready then Config.requestSave() end
             end,
         })
     end)
@@ -22072,7 +22154,7 @@ do (function()
                 Harvest.DropStatus = ("Tile (%d,%d) arah %s"):format(x, y,
                     Harvest.Facing < 0 and "kiri" or "kanan")
                 if Harvest.DropSeedOn then Harvest.DropSeedStatus = "Tile drop siap; menunggu seed 200" end
-                if Session.Ready then Config.save(true) end
+                if Session.Ready then Config.requestSave() end
                 notify("Auto Drop", Harvest.DropStatus, 4)
             end,
         })
@@ -22090,7 +22172,7 @@ do (function()
                 Harvest.DropSeedStatus = "Mati"
                 if UI.HarvestDropToggle then pcall(function() UI.HarvestDropToggle:Set(false) end) end
                 if UI.HarvestDropSeedToggle then pcall(function() UI.HarvestDropSeedToggle:Set(false) end) end
-                if Session.Ready then Config.save(true) end
+                if Session.Ready then Config.requestSave() end
             end,
         })
     end)
@@ -22166,20 +22248,14 @@ local function farmReconnect(show)
             Session.ItemRetry = false
         end)
     end
-    if UI.GeneralStatus then pcall(function() UI.GeneralStatus:SetDesc(refsText()) end) end
-    if show then notify("Farming", refsText(), 5) end
+    if show then notify("Farming", "Pemeriksaan koneksi game selesai.", 5) end
 end
 
 --// --- SETTING: GENERAL ---
 do (function()
     local function saveGeneral()
-        if Session.Ready then Config.save(true) end
+        if Session.Ready then Config.requestSave() end
     end
-
-    UI.GeneralStatus = GeneralTab:Paragraph({
-        Title = "Status Referensi Game",
-        Desc = refsText(),
-    })
 
     local gConnection = box(GeneralTab, "KONEKSI GAME", false)
     local gCharacter = box(GeneralTab, "KARAKTER", true)
@@ -22197,9 +22273,6 @@ do (function()
                 end
                 UI.later("general-reconnect", function()
                     farmReconnect("General")
-                    if UI.GeneralStatus then
-                        pcall(function() UI.GeneralStatus:SetDesc(refsText()) end)
-                    end
                 end)
             end,
         })
@@ -22283,10 +22356,10 @@ do (function()
             Title = "Position correction X",
             Placeholder = "-1, 0, atau 1",
             Value = tostring(State.CalibX),
-            Callback = function(value)
+            Callback = function(value, isFinal)
                 local n = tonumber(value)
                 if not n or n % 1 ~= 0 then
-                    notify("General", "Koreksi X harus berupa bilangan bulat.", 3)
+                    if isFinal then notify("General", "Koreksi X harus berupa bilangan bulat.", 3) end
                     return
                 end
                 State.CalibX = math.clamp(math.floor(n), -10, 10)
@@ -22300,10 +22373,10 @@ do (function()
             Title = "Position correction Y",
             Placeholder = "-1, 0, atau 1",
             Value = tostring(State.CalibY),
-            Callback = function(value)
+            Callback = function(value, isFinal)
                 local n = tonumber(value)
                 if not n or n % 1 ~= 0 then
-                    notify("General", "Koreksi Y harus berupa bilangan bulat.", 3)
+                    if isFinal then notify("General", "Koreksi Y harus berupa bilangan bulat.", 3) end
                     return
                 end
                 State.CalibY = math.clamp(math.floor(n), -10, 10)
@@ -22335,18 +22408,6 @@ do (function()
         end,
     })
 
-    task.spawn(function()
-        while alive() do
-            if UI.GeneralStatus then
-                local current = refsText()
-                if current ~= UI.GeneralShown then
-                    UI.GeneralShown = current
-                    pcall(function() UI.GeneralStatus:SetDesc(current) end)
-                end
-            end
-            task.wait(1)
-        end
-    end)
 end)() end
 
 buildGeneralConfig()
@@ -22473,7 +22534,7 @@ setOpen(true)
 setAccentIndex(State.accentIndex)
 loadConfig(true)
 --// BYTEHUB AUTO RECONNECT (INTEGRATED)
-do
+;(function()
     local function startByteHubAutoReconnect()
         local function getEnvironment()
             if type(getgenv) == "function" then
@@ -22529,13 +22590,39 @@ do
             return connection
         end
 
+        local DEFAULT_LOADER_URL = "https://raw.githubusercontent.com/brbrpatapimm/plerr/main/NewUI_Second_73.lua"
+        local LEGACY_LOADER_URL = "https://raw.githubusercontent.com/farelfirmansyah323-dot/growbloxcit/main/ByteHub_Loader.lua"
+
+        local function normalizeLoaderUrl(value)
+            local url = tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
+            if url == "" or url == LEGACY_LOADER_URL then
+                return DEFAULT_LOADER_URL
+            end
+
+            local owner, repo, branch, filePath = url:match(
+                "^https://github%.com/([^/]+)/([^/]+)/blob/([^/]+)/([^?#]+)"
+            )
+            if owner and repo and branch and filePath then
+                url = "https://raw.githubusercontent.com/" .. owner .. "/" .. repo .. "/" .. branch .. "/" .. filePath
+            else
+                owner, repo, branch, filePath = url:match(
+                    "^https://github%.com/([^/]+)/([^/]+)/raw/([^/]+)/([^?#]+)"
+                )
+                if owner and repo and branch and filePath then
+                    url = "https://raw.githubusercontent.com/" .. owner .. "/" .. repo .. "/" .. branch .. "/" .. filePath
+                end
+            end
+
+            return url
+        end
+
         local Reconnect = {
             On = false,
             World = true,
             Server = true,
             Keep = false,
             DelaySec = 5,
-            LoaderUrl = "https://raw.githubusercontent.com/farelfirmansyah323-dot/growbloxcit/main/ByteHub_Loader.lua",
+            LoaderUrl = DEFAULT_LOADER_URL,
             Target = "",
             LastWorld = "",
             Last = nil,
@@ -22556,6 +22643,10 @@ do
                 warn("[ByteHub] Gagal mendaftarkan konfigurasi Auto Reconnect: " .. tostring(err))
             end
         end
+
+        local storedLoaderUrl = tostring(Reconnect.LoaderUrl or "")
+        Reconnect.LoaderUrl = normalizeLoaderUrl(Reconnect.LoaderUrl)
+        local loaderUrlNeedsSave = storedLoaderUrl ~= Reconnect.LoaderUrl
 
         local HttpService = game:GetService("HttpService")
         local TeleportService = game:GetService("TeleportService")
@@ -22589,6 +22680,8 @@ do
                 pcall(Bridge.saveConfig, true)
             end
         end
+
+        if loaderUrlNeedsSave then saveConfig() end
 
         local function normalizeWorld(value)
             return tostring(value or ""):upper():gsub("[^A-Z0-9]", "")
@@ -22711,15 +22804,11 @@ do
         end
 
         local function queueLoader()
-            local url = tostring(Reconnect.LoaderUrl or ""):gsub("^%s+", ""):gsub("%s+$", "")
-            if url == "" then
-                url = "https://raw.githubusercontent.com/farelfirmansyah323-dot/growbloxcit/main/ByteHub_Loader.lua"
-            end
-            if url == "" then
-                return false, "Loader URL kosong. Isi URL ByteHub_Loader.lua."
-            end
+            local url = normalizeLoaderUrl(Reconnect.LoaderUrl)
+            Reconnect.LoaderUrl = url
+
             if not url:match("^https://") then
-                return false, "Loader URL harus menggunakan HTTPS."
+                return false, "Loader URL harus HTTPS. Gunakan URL GitHub file atau Raw URL."
             end
 
             local queueFunction = Env.queue_on_teleport
@@ -22733,32 +22822,104 @@ do
 
             local queuedSource = ([=[
                 if not game:IsLoaded() then game.Loaded:Wait() end
+
                 local loaderUrl = %q
                 local source
-                local ok, result = pcall(function() return game:HttpGet(loaderUrl) end)
-                if ok and type(result) == "string" then source = result end
-                if type(source) ~= "string" or source == "" then
-                    local env = (type(getgenv) == "function" and getgenv()) or _G
-                    local req = env.request or env.http_request
+                local lastError = "respons kosong"
+
+                local function validLua(text)
+                    if type(text) ~= "string" or text:match("^%%s*$") then
+                        return false, "respons kosong"
+                    end
+                    if text:sub(1, 3) == "\239\187\191" then
+                        text = text:sub(4)
+                    end
+                    if text:match("^%%s*<") then
+                        return false, "Server mengirim HTML, bukan script Lua. Periksa URL Loader."
+                    end
+                    return true, text
+                end
+
+                local ok, result = pcall(function()
+                    return game:HttpGet(loaderUrl)
+                end)
+                if ok then
+                    local valid, value = validLua(result)
+                    if valid then
+                        source = value
+                    else
+                        lastError = value
+                    end
+                else
+                    lastError = tostring(result)
+                end
+
+                if not source then
+                    local env = _G
+                    if type(getgenv) == "function" then
+                        local envOk, envValue = pcall(getgenv)
+                        if envOk and type(envValue) == "table" then env = envValue end
+                    end
+
+                    local requestApi = env.request
+                        or env.http_request
                         or (env.syn and env.syn.request)
                         or (env.http and env.http.request)
-                    if type(req) == "function" then
-                        local sent, response = pcall(req, { Url = loaderUrl, Method = "GET" })
+
+                    if type(requestApi) == "function" then
+                        local sent, response = pcall(requestApi, {
+                            Url = loaderUrl,
+                            Method = "GET",
+                        })
+
                         if sent and type(response) == "table" then
-                            source = response.Body or response.body
+                            local status = tonumber(response.StatusCode or response.Status)
+                            local body = response.Body or response.body
+                            if status and (status < 200 or status >= 300) then
+                                lastError = "HTTP " .. tostring(status)
+                            else
+                                local valid, value = validLua(body)
+                                if valid then
+                                    source = value
+                                else
+                                    lastError = value
+                                end
+                            end
+                        else
+                            lastError = tostring(response)
                         end
                     end
                 end
-                assert(type(source) == "string" and source ~= "", "ByteHub loader tidak dapat diunduh")
-                local compiler = loadstring or ((type(getgenv) == "function" and getgenv()) or _G).loadstring
-                assert(type(compiler) == "function", "loadstring tidak tersedia")
+
+                assert(type(source) == "string" and source ~= "",
+                    "[ByteHub] Gagal mengunduh loader: " .. tostring(lastError))
+
+                local env = _G
+                if type(getgenv) == "function" then
+                    local envOk, envValue = pcall(getgenv)
+                    if envOk and type(envValue) == "table" then env = envValue end
+                end
+
+                local compiler = loadstring or env.loadstring
+                assert(type(compiler) == "function", "[ByteHub] Executor tidak menyediakan loadstring.")
+
                 local fn, compileError = compiler(source, "ByteHub_Loader")
-                assert(fn, compileError)
-                fn()
+                assert(type(fn) == "function",
+                    "[ByteHub] Compile loader gagal: " .. tostring(compileError))
+
+                local ran, runtimeError = xpcall(fn, function(err)
+                    if debug and type(debug.traceback) == "function" then
+                        return debug.traceback(tostring(err), 2)
+                    end
+                    return tostring(err)
+                end)
+                assert(ran, "[ByteHub] Runtime loader gagal: " .. tostring(runtimeError))
             ]=]):format(url)
+
             local ok, result = pcall(queueFunction, queuedSource)
             if not ok then return false, result end
             if result == false then return false, "Executor menolak antrean loader." end
+            saveConfig()
             return true, result
         end
 
@@ -23054,6 +23215,7 @@ do
                 Title = "Target World",
                 Placeholder = "Kosongkan untuk world terakhir",
                 Value = Reconnect.Target,
+                Live = true,
                 Callback = function(value)
                     Reconnect.Target = tostring(value or "")
                     saveConfig()
@@ -23072,10 +23234,11 @@ do
 
             Runtime.Controls.LoaderUrl = tab:Input({
                 Title = "Loader URL",
-                Placeholder = "Raw HTTPS URL ByteHub_Loader.lua",
+                Placeholder = "GitHub file URL atau Raw Lua URL",
                 Value = Reconnect.LoaderUrl,
+                Live = true,
                 Callback = function(value)
-                    Reconnect.LoaderUrl = tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                    Reconnect.LoaderUrl = normalizeLoaderUrl(value)
                     saveConfig()
                 end,
             })
@@ -23158,7 +23321,7 @@ do
                     Reconnect.DelaySec = math.clamp(math.floor(tonumber(settings.DelaySec)), 2, 60)
                 end
                 if type(settings.LoaderUrl) == "string" and settings.LoaderUrl ~= "" then
-                    Reconnect.LoaderUrl = settings.LoaderUrl
+                    Reconnect.LoaderUrl = normalizeLoaderUrl(settings.LoaderUrl)
                 end
                 if type(settings.Target) == "string" then Reconnect.Target = settings.Target end
 
@@ -23242,7 +23405,7 @@ do
             pAutoReconnectStatus:Set("Auto Reconnect gagal dimuat: " .. tostring(err))
         end)
     end
-end
+end)()
 
 
 task.delay(0.6, function()
