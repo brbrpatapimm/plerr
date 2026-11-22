@@ -1488,17 +1488,8 @@ function UI.Dropdown(page, name, options, default, callback)
 	local current = multiSelect and normalizeSelection(default) or default
 	local open = false
 
-	local overlay = new("TextButton", {
-		Position = UDim2.fromScale(0, 0),
-		Size = UDim2.fromScale(1, 1),
-		BackgroundTransparency = 1,
-		Text = "",
-		AutoButtonColor = false,
-		Visible = false,
-		ZIndex = 79,
-		Parent = gui,
-	})
-
+	-- Outside-click detection uses UserInputService below.
+	-- Do not create a full-screen overlay under ScreenGui.
 	local function displayText()
 		if multiSelect then
 			return #current > 0 and table.concat(current, ", ") or "Pilih fitur..."
@@ -1545,6 +1536,17 @@ function UI.Dropdown(page, name, options, default, callback)
 
 	local obj = {}
 	local optionButtons = {}
+	local outsideClickConnection
+
+	local function containsPoint(guiObject, position)
+		if not guiObject or not guiObject.Visible then return false end
+		local absolutePosition = guiObject.AbsolutePosition
+		local absoluteSize = guiObject.AbsoluteSize
+		return position.X >= absolutePosition.X
+			and position.X <= absolutePosition.X + absoluteSize.X
+			and position.Y >= absolutePosition.Y
+			and position.Y <= absolutePosition.Y + absoluteSize.Y
+	end
 
 	local doneButton = new("TextButton", {
 		Position = UDim2.fromOffset(6, 4),
@@ -1560,10 +1562,6 @@ function UI.Dropdown(page, name, options, default, callback)
 	}, { corner(6), stroke(Theme.Stroke, 1, 0.45) })
 
 	doneButton.MouseButton1Click:Connect(function()
-		obj:Close()
-	end)
-
-	overlay.MouseButton1Click:Connect(function()
 		obj:Close()
 	end)
 
@@ -1630,8 +1628,11 @@ function UI.Dropdown(page, name, options, default, callback)
 	function obj:Close()
 		open = false
 		list.Visible = false
-		overlay.Visible = false
 		caret.Rotation = 45
+		if outsideClickConnection then
+			outsideClickConnection:Disconnect()
+			outsideClickConnection = nil
+		end
 	end
 
 	local function resizeList()
@@ -1655,9 +1656,25 @@ function UI.Dropdown(page, name, options, default, callback)
 		open = true
 		renderOptions()
 		resizeList()
-		overlay.Visible = true
 		list.Visible = true
 		caret.Rotation = 135
+
+		if outsideClickConnection then
+			outsideClickConnection:Disconnect()
+			outsideClickConnection = nil
+		end
+		outsideClickConnection = UIS.InputBegan:Connect(function(input)
+			if not open or not isPress(input) then return end
+
+			local position = input.Position
+			-- Klik pada field atau isi popup tidak menutup dropdown.
+			-- Klik di area lain langsung menutupnya tanpa memblokir kontrol lain.
+			if containsPoint(box, position) or containsPoint(list, position) then
+				return
+			end
+			obj:Close()
+		end)
+
 		if #options == 0 and type(onEmptyClick) == "function" then
 			task.spawn(onEmptyClick)
 		end
@@ -6163,7 +6180,7 @@ for _, key in ipairs({ "__ByteHubOpus", "__GTFarm" }) do -- __GTFarm = nama vers
     G[key] = nil
 end
 local Session = {}
-Session.Build = "2026-11-22-cycle-reconnect-standby-v90"
+Session.Build = "2026-11-22-cycle-reconnect-v92-rejoin-autosave"
 G.__ByteHubOpus = Session
 local function alive()
     return G.__ByteHubOpus == Session
@@ -8538,7 +8555,10 @@ do (function() -- scope terpisah agar tidak menambah local utama script
 
     function Config.requestSave(force)
         local forceSave = force == true
-        if (Config.AutoSave ~= true and not forceSave) or Config.Paused then return false end
+        if (Config.AutoSave ~= true and not forceSave)
+            or (Config.Paused and not forceSave) then
+            return false
+        end
         if not canFile then
             Config.Status = "Executor tidak bisa simpan file"
             return false
@@ -8561,7 +8581,7 @@ do (function() -- scope terpisah agar tidak menambah local utama script
         end
 
         -- Slider menyimpan sekali setelah drag selesai, bukan menulis file setiap frame.
-        if executorEnv.__ByteHubSliderActive == true then
+        if executorEnv.__ByteHubSliderActive == true and not forceSave then
             return true
         end
 
@@ -8572,7 +8592,10 @@ do (function() -- scope terpisah agar tidak menambah local utama script
         task.delay(0.01, function()
             if not alive() or generation ~= Config._SaveGeneration then return end
             Config._SaveQueued = false
-            if (Config.AutoSave ~= true and not forceSave) or Config.Paused then return end
+            if (Config.AutoSave ~= true and not forceSave)
+                or (Config.Paused and not forceSave) then
+                return
+            end
             local ok = Config.save(forceSave)
             if ok then Config.refreshUI() end
         end)
@@ -23118,8 +23141,11 @@ loadConfig(true)
             return connection
         end
 
-        local DEFAULT_LOADER_URL = "https://raw.githubusercontent.com/brbrpatapimm/plerr/main/NewUI_Second_90.lua"
+        local DEFAULT_LOADER_URL = "https://raw.githubusercontent.com/brbrpatapimm/plerr/main/NewUI_Second_92.lua"
+        local PREVIOUS_LOADER_URL_V91 = "https://raw.githubusercontent.com/brbrpatapimm/plerr/main/NewUI_Second_91.lua"
+        local PREVIOUS_LOADER_URL_V90 = "https://raw.githubusercontent.com/brbrpatapimm/plerr/main/NewUI_Second_90.lua"
         local PREVIOUS_LOADER_URL_V89 = "https://raw.githubusercontent.com/brbrpatapimm/plerr/main/NewUI_Second_89.lua"
+        local PREVIOUS_LOADER_URL_V83_BLOB = "https://github.com/brbrpatapimm/plerr/blob/main/NewUI_Second_83.lua"
         local PREVIOUS_LOADER_URL_V88 = "https://raw.githubusercontent.com/brbrpatapimm/plerr/main/NewUI_Second_88.lua"
         local PREVIOUS_LOADER_URL_V73 = "https://raw.githubusercontent.com/brbrpatapimm/plerr/main/NewUI_Second_73.lua"
         local LEGACY_LOADER_URL = "https://raw.githubusercontent.com/farelfirmansyah323-dot/growbloxcit/main/ByteHub_Loader.lua"
@@ -23127,7 +23153,10 @@ loadConfig(true)
         local function normalizeLoaderUrl(value)
             local url = tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
             if url == "" or url == LEGACY_LOADER_URL
+                or url == PREVIOUS_LOADER_URL_V91
+                or url == PREVIOUS_LOADER_URL_V90
                 or url == PREVIOUS_LOADER_URL_V89
+                or url == PREVIOUS_LOADER_URL_V83_BLOB
                 or url == PREVIOUS_LOADER_URL_V88 or url == PREVIOUS_LOADER_URL_V73 then
                 return DEFAULT_LOADER_URL
             end
@@ -23252,10 +23281,10 @@ loadConfig(true)
         end
 
         local function saveConfig()
-            if type(Bridge.autoSaveEnabled) == "function"
-                and Bridge.autoSaveEnabled()
-                and type(Bridge.saveConfig) == "function" then
-                pcall(Bridge.saveConfig, false)
+            if type(Bridge.saveConfig) == "function" then
+                pcall(Bridge.saveConfig, true)
+            elseif type(Bridge.saveCycleConfig) == "function" then
+                pcall(Bridge.saveCycleConfig)
             end
         end
 
@@ -23587,6 +23616,25 @@ loadConfig(true)
             return false, "Percobaan masuk world habis."
         end
 
+        -- Shared sequence: intentionally mirrors the Rejoin World Now button.
+        -- World references can remain stale briefly after the menu opens, so a
+        -- failed waitForWorldExit check must not abort the actual enterWorld call.
+        local function leaveAndEnterWorld(world, saved, reason)
+            world = normalizeWorld(world)
+            if world == "" then return false, "World tujuan kosong." end
+
+            if Bridge.hasActivity() then
+                pcall(Bridge.stopActivities)
+            end
+
+            if normalizeWorld(Bridge.getWorld()) ~= "" then
+                pcall(Bridge.leaveWorld)
+                waitForWorldExit(6) -- advisory wait only, same behavior as manual rejoin
+            end
+
+            return enterAndResume(world, saved, reason)
+        end
+
         Runtime.Cycle.ArmedStates = Runtime.Cycle.ArmedStates or {}
         Runtime.Cycle.WaitingForSingle = false
 
@@ -23773,7 +23821,10 @@ loadConfig(true)
 
         Runtime.Cycle.fail = function(token, message)
             if token ~= Runtime.Cycle.Token then return end
-            Reconnect.CycleOn = false
+
+            -- Keep the master toggle ON. A failed attempt pauses Cycle in
+            -- standby; it does not silently disable the user's configuration.
+            Reconnect.CycleOn = true
             Reconnect.Busy = false
             Runtime.Cycle.Transitioning = false
             Runtime.Cycle.NextAt = 0
@@ -23781,16 +23832,17 @@ loadConfig(true)
             Runtime.Cycle.PausedAt = nil
             Runtime.Cycle.RestartRequested = false
             Runtime.Cycle.WaitingForSingle = false
-            if type(Bridge.saveCycleConfig) == "function" then
-                pcall(Bridge.saveCycleConfig)
-            else
-                saveConfig()
-            end
-            if Runtime.Controls.CycleMaster then
-                pcall(function() Runtime.Controls.CycleMaster:Set(false) end)
-            end
-            Runtime.Cycle.status("Gagal: " .. tostring(message))
-            notify("Cycle Reconnect", tostring(message), 6)
+            Runtime.Cycle.rememberStates(Runtime.Cycle.readSnapshot())
+
+            saveCycleConfig()
+            Runtime.Cycle.status(
+                "Gagal: " .. tostring(message)
+                    .. " · Cycle tetap ON. Aktifkan ulang fitur Auto Farm untuk mencoba lagi."
+            )
+            notify(
+                tostring(message) .. " Cycle tetap ON; aktifkan ulang fitur Auto Farm untuk mencoba lagi.",
+                6
+            )
         end
 
         -- Toggle ON hanya mengaktifkan standby. Tidak ada fitur Auto Farm
@@ -23800,7 +23852,11 @@ loadConfig(true)
 
             local features = Runtime.Cycle.features()
             if #features == 0 then
-                return false, "Pilih minimal satu fitur di Cycle Features."
+                Reconnect.CycleOn = true
+                Runtime.Cycle.Token += 1
+                Runtime.Cycle.standby("Standby · pilih minimal satu fitur Cycle")
+                saveCycleConfig()
+                return true
             end
 
             Reconnect.CycleOn = true
@@ -23883,36 +23939,13 @@ loadConfig(true)
             end
 
             task.spawn(function()
-                local stopCall, stopped, stopError = pcall(Bridge.stopActivities)
-                if not stopCall or stopped == false then
-                    Reconnect.Busy = false
-                    Runtime.Cycle.fail(token, stopError or stopped or "Aktivitas gagal dihentikan.")
-                    return
-                end
-                task.wait(0.35)
+                -- Use the same leave -> enter path as Rejoin World Now.
+                -- Do not abort merely because the cached World reference has
+                -- not become empty yet; the world-selection screen may already
+                -- be open while the reference is stale.
+                local enterCall, entered, detail =
+                    pcall(leaveAndEnterWorld, world, snapshot, "Cycle Reconnect")
 
-                local currentWorld = normalizeWorld(Bridge.getWorld())
-                if currentWorld ~= "" then
-                    local leaveCall, left, leaveError = pcall(Bridge.leaveWorld)
-                    if not leaveCall or not left then
-                        Reconnect.Busy = false
-                        Runtime.Cycle.fail(token, leaveError or left or "Gagal keluar dari world.")
-                        return
-                    end
-                    if not waitForWorldExit(8) then
-                        Reconnect.Busy = false
-                        Runtime.Cycle.fail(token, "World belum keluar setelah perintah rejoin.")
-                        return
-                    end
-                end
-
-                -- Jika Cycle dimatikan ketika proses rejoin berlangsung,
-                -- tetap masuk kembali tetapi jangan mengaktifkan aktivitas.
-                if not Reconnect.CycleOn or token ~= Runtime.Cycle.Token then
-                    snapshot.plant, snapshot.farm, snapshot.harvest = false, false, false
-                end
-
-                local enterCall, entered, detail = pcall(enterAndResume, world, snapshot, "Cycle Reconnect")
                 Reconnect.Busy = false
                 if not enterCall then
                     entered, detail = false, tostring(entered)
@@ -23941,14 +23974,8 @@ loadConfig(true)
 
             local features = Runtime.Cycle.features()
             if #features == 0 then
-                Reconnect.CycleOn = false
-                if type(Bridge.saveCycleConfig) == "function" then
-                    pcall(Bridge.saveCycleConfig)
-                end
-                if Runtime.Controls.CycleMaster then
-                    pcall(function() Runtime.Controls.CycleMaster:Set(false) end)
-                end
-                Runtime.Cycle.standby("Nonaktif · pilih fitur terlebih dahulu")
+                Runtime.Cycle.standby("Standby · pilih minimal satu fitur Cycle")
+                saveCycleConfig()
                 return
             end
 
@@ -24152,12 +24179,7 @@ loadConfig(true)
 
             Reconnect.Busy = true
             task.spawn(function()
-                if Bridge.hasActivity() then pcall(Bridge.stopActivities) end
-                if normalizeWorld(Bridge.getWorld()) ~= "" then
-                    pcall(Bridge.leaveWorld)
-                    waitForWorldExit(6)
-                end
-                enterAndResume(world, saved, "Manual reconnect")
+                leaveAndEnterWorld(world, saved, "Manual reconnect")
                 Reconnect.Busy = false
             end)
         end
@@ -24258,16 +24280,12 @@ loadConfig(true)
                     Reconnect.CycleIndex = 1
 
                     if #Reconnect.CycleFeatures == 0 and Reconnect.CycleOn then
-                        Reconnect.CycleOn = false
                         Runtime.Cycle.Token += 1
                         Runtime.Cycle.NextAt = 0
                         Runtime.Cycle.CurrentFeature = nil
                         Runtime.Cycle.Transitioning = false
                         Runtime.Cycle.RestartRequested = false
-                        if Runtime.Controls.CycleMaster then
-                            pcall(function() Runtime.Controls.CycleMaster:Set(false) end)
-                        end
-                        Runtime.Cycle.standby("Nonaktif · pilih minimal satu fitur")
+                        Runtime.Cycle.standby("Standby · pilih minimal satu fitur Cycle")
                     elseif Reconnect.CycleOn then
                         Runtime.Cycle.standby(
                             "Pilihan diperbarui · aktifkan fitur secara manual di Auto Farm",
