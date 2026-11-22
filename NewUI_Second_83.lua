@@ -1488,6 +1488,17 @@ function UI.Dropdown(page, name, options, default, callback)
 	local current = multiSelect and normalizeSelection(default) or default
 	local open = false
 
+	local overlay = new("TextButton", {
+		Position = UDim2.fromScale(0, 0),
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		Text = "",
+		AutoButtonColor = false,
+		Visible = false,
+		ZIndex = 79,
+		Parent = gui,
+	})
+
 	local function displayText()
 		if multiSelect then
 			return #current > 0 and table.concat(current, ", ") or "Pilih fitur..."
@@ -1519,7 +1530,7 @@ function UI.Dropdown(page, name, options, default, callback)
 
 	local list = new("Frame", {
 		Position = UDim2.new(0, 16, 0, 60), Size = UDim2.new(1, -32, 0, 0),
-		AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = Theme.Surface2,
+		AutomaticSize = Enum.AutomaticSize.None, BackgroundColor3 = Theme.Surface2,
 		BorderSizePixel = 0, Visible = false, ZIndex = 80, Parent = gui,
 	}, { corner(7), stroke(Theme.Stroke, 1, 0.2) })
 	local listScroll = new("ScrollingFrame", {
@@ -1534,6 +1545,27 @@ function UI.Dropdown(page, name, options, default, callback)
 
 	local obj = {}
 	local optionButtons = {}
+
+	local doneButton = new("TextButton", {
+		Position = UDim2.fromOffset(6, 4),
+		Size = UDim2.new(1, -12, 0, 24),
+		BackgroundColor3 = Theme.Element,
+		AutoButtonColor = false,
+		Text = multiSelect and "Selesai" or "Tutup",
+		Font = FONT.Med,
+		TextSize = 11,
+		TextColor3 = Theme.Text,
+		ZIndex = 81,
+		Parent = list,
+	}, { corner(6), stroke(Theme.Stroke, 1, 0.45) })
+
+	doneButton.MouseButton1Click:Connect(function()
+		obj:Close()
+	end)
+
+	overlay.MouseButton1Click:Connect(function()
+		obj:Close()
+	end)
 
 	local function isSelected(option)
 		if multiSelect then return table.find(current, option) ~= nil end
@@ -1598,6 +1630,7 @@ function UI.Dropdown(page, name, options, default, callback)
 	function obj:Close()
 		open = false
 		list.Visible = false
+		overlay.Visible = false
 		caret.Rotation = 45
 	end
 
@@ -1606,9 +1639,15 @@ function UI.Dropdown(page, name, options, default, callback)
 		local rowH = 30
 		local maxH = 220
 		local visibleRows = math.max(#options, 1)
-		listScroll.Size = UDim2.fromOffset(box.AbsoluteSize.X, math.min(visibleRows * rowH + 8, maxH))
+		local scrollHeight = math.min(visibleRows * rowH + 8, maxH)
+
+		listScroll.Position = UDim2.fromOffset(0, 0)
+		listScroll.Size = UDim2.fromOffset(box.AbsoluteSize.X, scrollHeight)
+		doneButton.Position = UDim2.fromOffset(6, scrollHeight + 4)
+		doneButton.Size = UDim2.new(1, -12, 0, 24)
+
 		list.Position = UDim2.fromOffset(ap.X, ap.Y + box.AbsoluteSize.Y + 4)
-		list.Size = UDim2.fromOffset(box.AbsoluteSize.X, 0)
+		list.Size = UDim2.fromOffset(box.AbsoluteSize.X, scrollHeight + 34)
 	end
 
 	function obj:Open()
@@ -1616,6 +1655,7 @@ function UI.Dropdown(page, name, options, default, callback)
 		open = true
 		renderOptions()
 		resizeList()
+		overlay.Visible = true
 		list.Visible = true
 		caret.Rotation = 135
 		if #options == 0 and type(onEmptyClick) == "function" then
@@ -6123,7 +6163,7 @@ for _, key in ipairs({ "__ByteHubOpus", "__GTFarm" }) do -- __GTFarm = nama vers
     G[key] = nil
 end
 local Session = {}
-Session.Build = "2026-11-21-cycle-reconnect-v89-worldfix"
+Session.Build = "2026-11-22-cycle-reconnect-standby-v90"
 G.__ByteHubOpus = Session
 local function alive()
     return G.__ByteHubOpus == Session
@@ -8496,8 +8536,9 @@ do (function() -- scope terpisah agar tidak menambah local utama script
         return false
     end
 
-    function Config.requestSave()
-        if Config.AutoSave ~= true or Config.Paused then return false end
+    function Config.requestSave(force)
+        local forceSave = force == true
+        if (Config.AutoSave ~= true and not forceSave) or Config.Paused then return false end
         if not canFile then
             Config.Status = "Executor tidak bisa simpan file"
             return false
@@ -8531,8 +8572,8 @@ do (function() -- scope terpisah agar tidak menambah local utama script
         task.delay(0.01, function()
             if not alive() or generation ~= Config._SaveGeneration then return end
             Config._SaveQueued = false
-            if Config.AutoSave ~= true or Config.Paused then return end
-            local ok = Config.save(false)
+            if (Config.AutoSave ~= true and not forceSave) or Config.Paused then return end
+            local ok = Config.save(forceSave)
             if ok then Config.refreshUI() end
         end)
         return true
@@ -21737,8 +21778,13 @@ do (function() -- fungsi sendiri: variabel di dalam tidak ikut batas 200 local
         end,
         saveConfig = function(force)
             if not alive() then return false end
-            if type(Config.requestSave) == "function" then return Config.requestSave() end
+            if type(Config.requestSave) == "function" then return Config.requestSave(force == true) end
             return Config.save(force == true)
+        end,
+        saveCycleConfig = function()
+            if not alive() then return false end
+            if type(Config.requestSave) == "function" then return Config.requestSave(true) end
+            return Config.save(true)
         end,
         autoSaveEnabled = function()
             return alive() and Config.AutoSave == true
@@ -23072,7 +23118,8 @@ loadConfig(true)
             return connection
         end
 
-        local DEFAULT_LOADER_URL = "https://raw.githubusercontent.com/brbrpatapimm/plerr/main/NewUI_Second_89.lua"
+        local DEFAULT_LOADER_URL = "https://raw.githubusercontent.com/brbrpatapimm/plerr/main/NewUI_Second_90.lua"
+        local PREVIOUS_LOADER_URL_V89 = "https://raw.githubusercontent.com/brbrpatapimm/plerr/main/NewUI_Second_89.lua"
         local PREVIOUS_LOADER_URL_V88 = "https://raw.githubusercontent.com/brbrpatapimm/plerr/main/NewUI_Second_88.lua"
         local PREVIOUS_LOADER_URL_V73 = "https://raw.githubusercontent.com/brbrpatapimm/plerr/main/NewUI_Second_73.lua"
         local LEGACY_LOADER_URL = "https://raw.githubusercontent.com/farelfirmansyah323-dot/growbloxcit/main/ByteHub_Loader.lua"
@@ -23080,6 +23127,7 @@ loadConfig(true)
         local function normalizeLoaderUrl(value)
             local url = tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
             if url == "" or url == LEGACY_LOADER_URL
+                or url == PREVIOUS_LOADER_URL_V89
                 or url == PREVIOUS_LOADER_URL_V88 or url == PREVIOUS_LOADER_URL_V73 then
                 return DEFAULT_LOADER_URL
             end
@@ -23207,7 +23255,15 @@ loadConfig(true)
             if type(Bridge.autoSaveEnabled) == "function"
                 and Bridge.autoSaveEnabled()
                 and type(Bridge.saveConfig) == "function" then
-                pcall(Bridge.saveConfig, true)
+                pcall(Bridge.saveConfig, false)
+            end
+        end
+
+        local function saveCycleConfig()
+            if type(Bridge.saveCycleConfig) == "function" then
+                pcall(Bridge.saveCycleConfig)
+            else
+                saveConfig()
             end
         end
 
@@ -23273,6 +23329,8 @@ loadConfig(true)
                     CycleCustomMinutes = math.clamp(math.floor(tonumber(Reconnect.CycleCustomMinutes) or 5), 1, 1440),
                     CycleIndex = math.max(1, math.floor(tonumber(Reconnect.CycleIndex) or 1)),
                     CycleWorld = tostring(Reconnect.CycleWorld or ""),
+                    CycleTracking = Runtime.Cycle.isTracking() == true,
+                    CycleActiveFeature = tostring(Runtime.Cycle.CurrentFeature or ""),
                 },
                 UserId = USER_ID,
                 PlaceId = game.PlaceId,
@@ -23529,6 +23587,9 @@ loadConfig(true)
             return false, "Percobaan masuk world habis."
         end
 
+        Runtime.Cycle.ArmedStates = Runtime.Cycle.ArmedStates or {}
+        Runtime.Cycle.WaitingForSingle = false
+
         Runtime.Cycle.flagFor = function(feature)
             if feature == "Auto PnB" then return "farm" end
             if feature == "Auto Plant" then return "plant" end
@@ -23550,13 +23611,53 @@ loadConfig(true)
             return minutes * 60
         end
 
+        Runtime.Cycle.readSnapshot = function()
+            local ok, saved = pcall(Bridge.captureSnapshot)
+            if not ok or type(saved) ~= "table" then return nil end
+            return saved
+        end
+
+        Runtime.Cycle.activeFeatures = function(saved)
+            local activeFeatures = {}
+            if type(saved) ~= "table" then return activeFeatures end
+
+            local selected = {}
+            for _, feature in ipairs(Runtime.Cycle.features()) do
+                selected[feature] = true
+            end
+
+            for _, feature in ipairs(CYCLE_FEATURES) do
+                local flag = Runtime.Cycle.flagFor(feature)
+                if selected[feature] and flag and saved[flag] == true then
+                    activeFeatures[#activeFeatures + 1] = feature
+                end
+            end
+            return activeFeatures
+        end
+
+        Runtime.Cycle.rememberStates = function(saved)
+            for _, feature in ipairs(CYCLE_FEATURES) do
+                local flag = Runtime.Cycle.flagFor(feature)
+                Runtime.Cycle.ArmedStates[flag] =
+                    type(saved) == "table" and saved[flag] == true or false
+            end
+        end
+
+        Runtime.Cycle.isTracking = function()
+            return Reconnect.CycleOn == true
+                and Runtime.Cycle.CurrentFeature ~= nil
+                and (Runtime.Cycle.NextAt > 0 or Runtime.Cycle.Transitioning)
+        end
+
         Runtime.Cycle.status = function(message)
             if message then
                 Runtime.Cycle.StatusText = tostring(message)
             elseif not Reconnect.CycleOn then
                 Runtime.Cycle.StatusText = "Nonaktif"
             elseif Runtime.Cycle.Transitioning then
-                Runtime.Cycle.StatusText = "Menyiapkan rejoin berikutnya..."
+                Runtime.Cycle.StatusText = "Rejoin World Now · memulihkan aktivitas..."
+            elseif Runtime.Cycle.WaitingForSingle then
+                Runtime.Cycle.StatusText = "Aktifkan satu fitur Cycle pada satu waktu."
             elseif Runtime.Cycle.NextAt > 0 then
                 local left = math.max(0, math.ceil(Runtime.Cycle.NextAt - os.clock()))
                 local minutes = math.floor(left / 60)
@@ -23565,7 +23666,7 @@ loadConfig(true)
                     tostring(Runtime.Cycle.CurrentFeature or "-"), minutes, seconds
                 )
             else
-                Runtime.Cycle.StatusText = "Menunggu fitur aktif..."
+                Runtime.Cycle.StatusText = "Standby · aktifkan fitur secara manual di Auto Farm"
             end
 
             local control = Runtime.Controls and Runtime.Controls.CycleStatus
@@ -23574,14 +23675,21 @@ loadConfig(true)
             end
         end
 
-        Runtime.Cycle.makeSnapshot = function(feature)
-            local ok, base = pcall(Bridge.captureSnapshot)
-            if not ok or type(base) ~= "table" then
+        Runtime.Cycle.makeSnapshot = function(feature, base)
+            if type(base) ~= "table" then
+                base = Runtime.Cycle.readSnapshot()
+            end
+            if type(base) ~= "table" then
                 return nil, "Snapshot aktivitas tidak tersedia."
             end
 
+            local flag = Runtime.Cycle.flagFor(feature)
+            if not flag or base[flag] ~= true then
+                return nil, "Aktifkan " .. tostring(feature) .. " secara manual di tab Auto Farm terlebih dahulu."
+            end
+
             local world = tostring(base.world or Bridge.getWorld() or "")
-            if world == "" then return nil, "Masuk ke world terlebih dahulu." end
+            if world == "" then return nil, "World aktif tidak ditemukan." end
 
             local snapshot = {
                 world = world,
@@ -23589,6 +23697,8 @@ loadConfig(true)
                 farm = false,
                 harvest = false,
                 plantSeedId = base.plantSeedId,
+                pnbX = tonumber(base.pnbX),
+                pnbY = tonumber(base.pnbY),
                 tx = tonumber(base.tx),
                 ty = tonumber(base.ty),
             }
@@ -23596,7 +23706,7 @@ loadConfig(true)
             if feature == "Auto Plant" then
                 local seedId = tonumber(base.plantSeedId)
                 if not seedId then
-                    return nil, "Pilih seed Auto Plant terlebih dahulu sebelum mengaktifkan Cycle Reconnect."
+                    return nil, "Seed Auto Plant yang sedang berjalan tidak dapat dibaca."
                 end
                 snapshot.plant = true
                 snapshot.plantSeedId = seedId
@@ -23604,15 +23714,13 @@ loadConfig(true)
                 local x = tonumber(base.pnbX) or tonumber(base.tx)
                 local y = tonumber(base.pnbY) or tonumber(base.ty)
                 if x == nil or y == nil then
-                    return nil, "Posisi Auto PnB belum terbaca. Masuk world dan pastikan karakter berada di area farm."
+                    return nil, "Koordinat Auto PnB tidak tersedia. Pastikan Auto PnB sedang berjalan."
                 end
                 snapshot.farm = true
                 snapshot.pnbX, snapshot.pnbY = x, y
                 snapshot.tx, snapshot.ty = x, y
             elseif feature == "Auto Harvest" then
                 snapshot.harvest = true
-            else
-                return nil, "Fitur Cycle Reconnect tidak dikenal: " .. tostring(feature)
             end
 
             return snapshot
@@ -23621,19 +23729,46 @@ loadConfig(true)
         Runtime.Cycle.isFeatureActive = function(feature)
             local flag = Runtime.Cycle.flagFor(feature)
             if not flag then return false end
-            local ok, saved = pcall(Bridge.captureSnapshot)
-            return ok and type(saved) == "table" and saved[flag] == true
+            local saved = Runtime.Cycle.readSnapshot()
+            return type(saved) == "table" and saved[flag] == true
         end
 
         Runtime.Cycle.waitFeature = function(feature, token, timeout)
-            local deadline = os.clock() + (timeout or 75)
+            local deadline = os.clock() + (timeout or 90)
             while active() and Reconnect.CycleOn
                 and token == Runtime.Cycle.Token
                 and os.clock() < deadline do
                 if Runtime.Cycle.isFeatureActive(feature) then return true end
                 task.wait(0.5)
             end
-            return false, "Fitur " .. tostring(feature) .. " belum aktif."
+            return false, "Fitur " .. tostring(feature) .. " belum aktif setelah rejoin."
+        end
+
+        Runtime.Cycle.setTimer = function(feature, saved, message)
+            if not Reconnect.CycleOn then return false end
+            Runtime.Cycle.CurrentFeature = feature
+            Runtime.Cycle.CycleWorld = tostring((saved and saved.world) or Bridge.getWorld() or "")
+            Reconnect.CycleWorld = Runtime.Cycle.CycleWorld
+            Runtime.Cycle.Transitioning = false
+            Runtime.Cycle.NextAt = os.clock() + Runtime.Cycle.intervalSeconds()
+            Runtime.Cycle.WaitingForSingle = false
+            Runtime.Cycle.rememberStates(saved or Runtime.Cycle.readSnapshot())
+            Runtime.Cycle.status()
+            if message then
+                notify("Cycle Reconnect", message, 4)
+            end
+            return true
+        end
+
+        Runtime.Cycle.standby = function(message, saved)
+            Runtime.Cycle.CurrentFeature = nil
+            Runtime.Cycle.NextAt = 0
+            Runtime.Cycle.Transitioning = false
+            Runtime.Cycle.CycleWorld = ""
+            Reconnect.CycleWorld = ""
+            Runtime.Cycle.WaitingForSingle = false
+            Runtime.Cycle.rememberStates(saved or Runtime.Cycle.readSnapshot())
+            Runtime.Cycle.status(message or "Standby · aktifkan fitur secara manual di Auto Farm")
         end
 
         Runtime.Cycle.fail = function(token, message)
@@ -23642,9 +23777,15 @@ loadConfig(true)
             Reconnect.Busy = false
             Runtime.Cycle.Transitioning = false
             Runtime.Cycle.NextAt = 0
+            Runtime.Cycle.CurrentFeature = nil
             Runtime.Cycle.PausedAt = nil
             Runtime.Cycle.RestartRequested = false
-            saveConfig()
+            Runtime.Cycle.WaitingForSingle = false
+            if type(Bridge.saveCycleConfig) == "function" then
+                pcall(Bridge.saveCycleConfig)
+            else
+                saveConfig()
+            end
             if Runtime.Controls.CycleMaster then
                 pcall(function() Runtime.Controls.CycleMaster:Set(false) end)
             end
@@ -23652,122 +23793,100 @@ loadConfig(true)
             notify("Cycle Reconnect", tostring(message), 6)
         end
 
-        Runtime.Cycle.start = function(resetIndex)
+        -- Toggle ON hanya mengaktifkan standby. Tidak ada fitur Auto Farm
+        -- yang dinyalakan atau dihentikan dari fungsi ini.
+        Runtime.Cycle.start = function()
             if not active() then return false, "ByteHub belum siap." end
 
             local features = Runtime.Cycle.features()
             if #features == 0 then
-                return false, "Pilih minimal satu fitur di dropdown Cycle Features."
-            end
-            if normalizeWorld(Bridge.getWorld()) == "" then
-                return false, "Masuk ke world terlebih dahulu agar Cycle Reconnect mengetahui world tujuan."
+                return false, "Pilih minimal satu fitur di Cycle Features."
             end
 
-            if resetIndex then Reconnect.CycleIndex = 1 end
-            Reconnect.CycleIndex = math.clamp(
-                math.floor(tonumber(Reconnect.CycleIndex) or 1), 1, #features
-            )
             Reconnect.CycleOn = true
             Runtime.Cycle.Token += 1
-            local token = Runtime.Cycle.Token
-            Runtime.Cycle.Transitioning = true
+            Runtime.Cycle.Transitioning = false
             Runtime.Cycle.NextAt = 0
+            Runtime.Cycle.CurrentFeature = nil
             Runtime.Cycle.PausedAt = nil
             Runtime.Cycle.RestartRequested = false
-            saveConfig()
-            Runtime.Cycle.status("Menyiapkan " .. features[Reconnect.CycleIndex] .. "...")
+            Runtime.Cycle.WaitingForSingle = false
+            local current = Runtime.Cycle.readSnapshot()
+            Runtime.Cycle.rememberStates(current)
+            if type(Bridge.saveCycleConfig) == "function" then
+                pcall(Bridge.saveCycleConfig)
+            else
+                saveConfig()
+            end
+            Runtime.Cycle.status("Standby · aktifkan salah satu fitur terpilih secara manual di Auto Farm")
+            return true
+        end
 
+        Runtime.Cycle.resumeAfterRecovery = function(feature, token)
+            if not Reconnect.CycleOn or not feature then return false end
+            token = token or Runtime.Cycle.Token
+            Runtime.Cycle.CurrentFeature = feature
+            Runtime.Cycle.Transitioning = true
+            Runtime.Cycle.NextAt = 0
+            Runtime.Cycle.status("Memulihkan " .. feature .. " setelah rejoin...")
             task.spawn(function()
-                local feature = features[Reconnect.CycleIndex]
-                local guardMode = type(Bridge.getGuardMode) == "function" and Bridge.getGuardMode() or "idle"
-                if guardMode == "away" or guardMode == "out" or guardMode == "pause" or guardMode == "back" then
-                    Runtime.Cycle.fail(token, "Penjaga sedang dalam proses. Tunggu sampai status Guard kembali idle.")
-                    return
-                end
-
-                local snapshot, snapshotError = Runtime.Cycle.makeSnapshot(feature)
-                if not snapshot then
-                    Runtime.Cycle.fail(token, snapshotError)
-                    return
-                end
-                Reconnect.CycleWorld = snapshot.world
-
-                local stopCall, stopped, stopError = pcall(Bridge.stopActivities)
-                if not stopCall or stopped == false then
-                    Runtime.Cycle.fail(token, stopError or stopped or "Aktivitas sebelumnya gagal dihentikan.")
-                    return
-                end
-                task.wait(0.35)
-
-                if not Reconnect.CycleOn or token ~= Runtime.Cycle.Token then
-                    Runtime.Cycle.Transitioning = false
-                    Runtime.Cycle.status("Nonaktif")
-                    return
-                end
-
-                local resumeCall, resumed, resumeError = pcall(Bridge.resumeActivities, snapshot)
-                if not resumeCall or resumed == false then
-                    Runtime.Cycle.fail(token, resumeError or resumed or "Gagal memulai fitur pertama.")
-                    return
-                end
-
-                local started, startError = Runtime.Cycle.waitFeature(feature, token, 75)
-                if token ~= Runtime.Cycle.Token then return end
+                local started, startError = Runtime.Cycle.waitFeature(feature, token, 90)
+                if token ~= Runtime.Cycle.Token or not Reconnect.CycleOn then return end
                 if not started then
                     Runtime.Cycle.fail(token, startError)
                     return
                 end
-
-                Runtime.Cycle.CurrentFeature = feature
-                Runtime.Cycle.Transitioning = false
-                Runtime.Cycle.NextAt = os.clock() + Runtime.Cycle.intervalSeconds()
-                saveConfig()
-                Runtime.Cycle.status()
-                notify("Cycle Reconnect", feature .. " dimulai. Rejoin dalam " ..
-                    tostring(math.floor(Runtime.Cycle.intervalSeconds() / 60)) .. " menit.", 4)
+                local current = Runtime.Cycle.readSnapshot()
+                Runtime.Cycle.setTimer(feature, current,
+                    feature .. " aktif kembali. Timer dimulai ulang.")
             end)
             return true
         end
 
         Runtime.Cycle.advance = function()
             if not active() or not Reconnect.CycleOn or Runtime.Cycle.Transitioning then return end
-            local features = Runtime.Cycle.features()
-            if #features == 0 then
-                Runtime.Cycle.fail(Runtime.Cycle.Token, "Tidak ada fitur yang dipilih.")
+
+            local current = Runtime.Cycle.readSnapshot()
+            local activeFeatures = Runtime.Cycle.activeFeatures(current)
+            if #activeFeatures == 0 then
+                Runtime.Cycle.standby("Standby · fitur Auto Farm sudah dimatikan", current)
+                return
+            end
+            if #activeFeatures > 1 then
+                Runtime.Cycle.standby("Pilih satu fitur Cycle yang aktif pada satu waktu.", current)
+                Runtime.Cycle.WaitingForSingle = true
                 return
             end
 
-            local currentIndex = math.clamp(math.floor(tonumber(Reconnect.CycleIndex) or 1), 1, #features)
-            local nextIndex = currentIndex % #features + 1
-            local nextFeature = features[nextIndex]
-            local token = Runtime.Cycle.Token
+            local feature = activeFeatures[1]
+            local snapshot, snapshotError = Runtime.Cycle.makeSnapshot(feature, current)
+            if not snapshot then
+                Runtime.Cycle.standby(snapshotError, current)
+                return
+            end
 
-            Reconnect.CycleIndex = nextIndex
+            local world = tostring(snapshot.world or "")
+            if normalizeWorld(world) == "" then
+                Runtime.Cycle.fail(Runtime.Cycle.Token, "World tujuan tidak diketahui.")
+                return
+            end
+
+            local token = Runtime.Cycle.Token
+            Runtime.Cycle.CurrentFeature = feature
+            Reconnect.CycleWorld = world
             Runtime.Cycle.Transitioning = true
             Runtime.Cycle.NextAt = 0
             Reconnect.Busy = true
-            saveConfig()
-            Runtime.Cycle.status("Rejoin World Now → " .. nextFeature)
+            Runtime.Cycle.status("Rejoin World Now · memulihkan " .. feature .. "...")
+            if type(Bridge.saveCycleConfig) == "function" then
+                pcall(Bridge.saveCycleConfig)
+            end
 
             task.spawn(function()
-                local snapshot, snapshotError = Runtime.Cycle.makeSnapshot(nextFeature)
-                if not snapshot then
-                    Reconnect.Busy = false
-                    Runtime.Cycle.fail(token, snapshotError)
-                    return
-                end
-                local world = tostring(Reconnect.CycleWorld or snapshot.world or "")
-                if normalizeWorld(world) == "" then
-                    Reconnect.Busy = false
-                    Runtime.Cycle.fail(token, "World cycle tidak diketahui.")
-                    return
-                end
-                Reconnect.CycleWorld = world
-
                 local stopCall, stopped, stopError = pcall(Bridge.stopActivities)
                 if not stopCall or stopped == false then
                     Reconnect.Busy = false
-                    Runtime.Cycle.fail(token, stopError or stopped or "Aktivitas sebelumnya gagal dihentikan.")
+                    Runtime.Cycle.fail(token, stopError or stopped or "Aktivitas gagal dihentikan.")
                     return
                 end
                 task.wait(0.35)
@@ -23777,7 +23896,7 @@ loadConfig(true)
                     local leaveCall, left, leaveError = pcall(Bridge.leaveWorld)
                     if not leaveCall or not left then
                         Reconnect.Busy = false
-                        Runtime.Cycle.fail(token, leaveError or left or "Gagal keluar dari world sebelum rejoin.")
+                        Runtime.Cycle.fail(token, leaveError or left or "Gagal keluar dari world.")
                         return
                     end
                     if not waitForWorldExit(8) then
@@ -23787,8 +23906,8 @@ loadConfig(true)
                     end
                 end
 
-                -- Jika toggle dimatikan saat proses keluar world, tetap masuk
-                -- kembali tetapi jangan mengaktifkan fitur berikutnya.
+                -- Jika Cycle dimatikan ketika proses rejoin berlangsung,
+                -- tetap masuk kembali tetapi jangan mengaktifkan aktivitas.
                 if not Reconnect.CycleOn or token ~= Runtime.Cycle.Token then
                     snapshot.plant, snapshot.farm, snapshot.harvest = false, false, false
                 end
@@ -23800,7 +23919,7 @@ loadConfig(true)
                 end
 
                 if entered and detail == "hopping" then
-                    Runtime.Cycle.status("Berpindah server. Siklus dilanjutkan setelah loader aktif.")
+                    Runtime.Cycle.status("Rejoin sedang berjalan. Aktivitas dipulihkan setelah loader aktif.")
                     return
                 end
                 if not entered then
@@ -23809,77 +23928,54 @@ loadConfig(true)
                 end
 
                 if not Reconnect.CycleOn or token ~= Runtime.Cycle.Token then
-                    Runtime.Cycle.Transitioning = false
-                    Runtime.Cycle.NextAt = 0
-                    Runtime.Cycle.status("Nonaktif")
+                    Runtime.Cycle.standby("Nonaktif · rejoin selesai")
                     return
                 end
 
-                local started, startError = Runtime.Cycle.waitFeature(nextFeature, token, 90)
-                if not started then
-                    Runtime.Cycle.fail(token, startError)
-                    return
-                end
-
-                Runtime.Cycle.CurrentFeature = nextFeature
-                Runtime.Cycle.Transitioning = false
-                Runtime.Cycle.NextAt = os.clock() + Runtime.Cycle.intervalSeconds()
-                saveConfig()
-                Runtime.Cycle.status()
-                notify("Cycle Reconnect", nextFeature .. " dimulai. Rejoin berikutnya dalam " ..
-                    tostring(math.floor(Runtime.Cycle.intervalSeconds() / 60)) .. " menit.", 4)
+                Runtime.Cycle.resumeAfterRecovery(feature, token)
             end)
         end
 
         Runtime.Cycle.bootstrap = function(pending, pendingHopping)
             if not Reconnect.CycleOn or not active() or pendingHopping then return end
+
             local features = Runtime.Cycle.features()
             if #features == 0 then
                 Reconnect.CycleOn = false
-                saveConfig()
+                if type(Bridge.saveCycleConfig) == "function" then
+                    pcall(Bridge.saveCycleConfig)
+                end
                 if Runtime.Controls.CycleMaster then
                     pcall(function() Runtime.Controls.CycleMaster:Set(false) end)
                 end
-                Runtime.Cycle.status("Nonaktif · pilih fitur terlebih dahulu")
+                Runtime.Cycle.standby("Nonaktif · pilih fitur terlebih dahulu")
                 return
             end
 
-            Reconnect.CycleIndex = math.clamp(
-                math.floor(tonumber(Reconnect.CycleIndex) or 1), 1, #features
-            )
-            local feature = features[Reconnect.CycleIndex]
-            if Reconnect.CycleWorld == "" and type(pending) == "table"
-                and type(pending.Activity) == "table" then
-                Reconnect.CycleWorld = tostring(pending.Activity.world or "")
+            local settings = type(pending) == "table" and pending.Settings or nil
+            local wasTracking = type(settings) == "table" and settings.CycleTracking == true
+            local expectedFeature = type(settings) == "table" and settings.CycleActiveFeature or nil
+            local pendingActivity = type(pending) == "table" and pending.Activity or nil
+            local pendingActive = Runtime.Cycle.activeFeatures(pendingActivity)
+
+            if Reconnect.CycleWorld == "" and type(pendingActivity) == "table" then
+                Reconnect.CycleWorld = tostring(pendingActivity.world or "")
             end
             if Reconnect.CycleWorld == "" then
                 Reconnect.CycleWorld = tostring(Bridge.getWorld() or "")
             end
-            local flag = Runtime.Cycle.flagFor(feature)
-            local pendingMatches = type(pending) == "table"
-                and type(pending.Activity) == "table"
-                and flag ~= nil and pending.Activity[flag] == true
 
-            if pendingMatches then
+            if wasTracking and type(expectedFeature) == "string"
+                and table.find(pendingActive, expectedFeature) then
                 Runtime.Cycle.Token += 1
-                local token = Runtime.Cycle.Token
-                Runtime.Cycle.Transitioning = true
-                Runtime.Cycle.status("Memulihkan " .. feature .. " setelah rejoin...")
-                task.spawn(function()
-                    local started = Runtime.Cycle.waitFeature(feature, token, 90)
-                    if token ~= Runtime.Cycle.Token then return end
-                    if not started then
-                        Runtime.Cycle.Transitioning = false
-                        Runtime.Cycle.start(false)
-                        return
-                    end
-                    Runtime.Cycle.CurrentFeature = feature
-                    Runtime.Cycle.Transitioning = false
-                    Runtime.Cycle.NextAt = os.clock() + Runtime.Cycle.intervalSeconds()
-                    Runtime.Cycle.status()
-                end)
+                Runtime.Cycle.resumeAfterRecovery(expectedFeature, Runtime.Cycle.Token)
             else
-                Runtime.Cycle.start(false)
+                -- Rejoin dari Auto Reconnect biasa tidak boleh menyalakan timer
+                -- Cycle jika Cycle sebelumnya masih standby.
+                Runtime.Cycle.standby(
+                    "Standby · aktifkan fitur secara manual di Auto Farm",
+                    Runtime.Cycle.readSnapshot()
+                )
             end
         end
 
@@ -23895,7 +23991,8 @@ loadConfig(true)
         end
 
         local function onWorldClosed(message)
-            if not active() or not ((Reconnect.On and Reconnect.World) or Reconnect.CycleOn)
+            local cycleTracking = Runtime.Cycle.isTracking()
+            if not active() or not ((Reconnect.On and Reconnect.World) or cycleTracking)
                 or Reconnect.Busy or Reconnect.Disconnecting then
                 return
             end
@@ -23904,6 +24001,7 @@ loadConfig(true)
             if guardMode == "away" or guardMode == "out" then return end
 
             local saved = getCurrentSnapshot()
+            local cycleFeature = cycleTracking and Runtime.Cycle.CurrentFeature or nil
             local world = (saved and saved.world) or targetWorld()
             world = normalizeWorld(world)
             if world == "" then return end
@@ -23917,7 +24015,7 @@ loadConfig(true)
 
                 task.wait(math.max(1, tonumber(Reconnect.DelaySec) or 5))
 
-                if not active() or not (Reconnect.On or Reconnect.CycleOn) then
+                if not active() or not (Reconnect.On or (Reconnect.CycleOn and cycleFeature ~= nil)) then
                     Reconnect.Busy = false
                     Runtime.Cycle.Transitioning = false
                     return
@@ -23928,7 +24026,7 @@ loadConfig(true)
                     waitForWorldExit(6)
                 end
 
-                if Reconnect.CycleOn then
+                if cycleFeature then
                     Runtime.Cycle.Transitioning = true
                     Runtime.Cycle.NextAt = 0
                 end
@@ -23936,30 +24034,10 @@ loadConfig(true)
                 local entered, detail = enterAndResume(world, saved, "World recovery")
                 Reconnect.Busy = false
 
-                if Reconnect.CycleOn and entered and detail ~= "hopping" then
-                    local features = Runtime.Cycle.features()
-                    local index = math.clamp(math.floor(tonumber(Reconnect.CycleIndex) or 1), 1, math.max(#features, 1))
-                    local feature = features[index]
-                    local token = Runtime.Cycle.Token
-                    if feature then
-                        task.spawn(function()
-                            local started, startError = Runtime.Cycle.waitFeature(feature, token, 90)
-                            if token ~= Runtime.Cycle.Token or not Reconnect.CycleOn then return end
-                            if not started then
-                                Runtime.Cycle.fail(token, startError)
-                                return
-                            end
-                            Runtime.Cycle.CurrentFeature = feature
-                            Runtime.Cycle.Transitioning = false
-                            Runtime.Cycle.NextAt = os.clock() + Runtime.Cycle.intervalSeconds()
-                            Runtime.Cycle.status()
-                        end)
-                    else
-                        Runtime.Cycle.Transitioning = false
-                        Runtime.Cycle.status("Menunggu pilihan fitur Cycle Reconnect.")
-                    end
-                elseif Reconnect.CycleOn and entered and detail == "hopping" then
-                    Runtime.Cycle.status("Berpindah server. Siklus dilanjutkan setelah loader aktif.")
+                if cycleFeature and Reconnect.CycleOn and entered and detail ~= "hopping" then
+                    Runtime.Cycle.resumeAfterRecovery(cycleFeature)
+                elseif cycleFeature and Reconnect.CycleOn and entered and detail == "hopping" then
+                    Runtime.Cycle.status("Rejoin sedang berjalan. Aktivitas dipulihkan setelah loader aktif.")
                 else
                     Runtime.Cycle.Transitioning = false
                 end
@@ -23967,7 +24045,7 @@ loadConfig(true)
         end
 
         local function onServerDisconnect(message)
-            if not active() or not ((Reconnect.On and Reconnect.Server) or Reconnect.CycleOn)
+            if not active() or not ((Reconnect.On and Reconnect.Server) or Runtime.Cycle.isTracking())
                 or Reconnect.Disconnecting then
                 return
             end
@@ -24171,32 +24249,38 @@ loadConfig(true)
 
             Runtime.Controls.CycleFeatures = tab:Dropdown({
                 Title = "Cycle Features",
-                Desc = "Pilih satu atau beberapa fitur Auto Farm yang dijalankan bergantian.",
+                Desc = "Pilih fitur yang boleh dipulihkan. Aktifkan fiturnya secara manual di tab Auto Farm.",
                 Values = CYCLE_FEATURES,
                 Value = Reconnect.CycleFeatures,
                 MultiSelect = true,
                 Callback = function(values)
                     Reconnect.CycleFeatures = normalizeCycleFeatures(values)
                     Reconnect.CycleIndex = 1
-                    saveConfig()
 
                     if #Reconnect.CycleFeatures == 0 and Reconnect.CycleOn then
                         Reconnect.CycleOn = false
+                        Runtime.Cycle.Token += 1
                         Runtime.Cycle.NextAt = 0
+                        Runtime.Cycle.CurrentFeature = nil
+                        Runtime.Cycle.Transitioning = false
                         Runtime.Cycle.RestartRequested = false
                         if Runtime.Controls.CycleMaster then
                             pcall(function() Runtime.Controls.CycleMaster:Set(false) end)
                         end
-                        Runtime.Cycle.status("Nonaktif · pilih minimal satu fitur")
+                        Runtime.Cycle.standby("Nonaktif · pilih minimal satu fitur")
                     elseif Reconnect.CycleOn then
-                        Runtime.Cycle.RestartRequested = true
+                        Runtime.Cycle.standby(
+                            "Pilihan diperbarui · aktifkan fitur secara manual di Auto Farm",
+                            Runtime.Cycle.readSnapshot()
+                        )
                     end
+                    saveCycleConfig()
                 end,
             })
 
             Runtime.Controls.CycleInterval = tab:Dropdown({
                 Title = "Cycle Interval",
-                Desc = "Durasi setiap fitur sebelum Rejoin World Now.",
+                Desc = "Waktu aktif fitur yang dipilih sebelum Rejoin World Now.",
                 Values = CYCLE_INTERVALS,
                 Value = Reconnect.CycleIntervalMode,
                 Callback = function(value)
@@ -24205,7 +24289,7 @@ loadConfig(true)
                     if Reconnect.CycleOn and Runtime.Cycle.NextAt > 0 then
                         Runtime.Cycle.NextAt = os.clock() + Runtime.Cycle.intervalSeconds()
                     end
-                    saveConfig()
+                    saveCycleConfig()
                     Runtime.Cycle.status()
                 end,
             })
@@ -24229,34 +24313,38 @@ loadConfig(true)
                         and Reconnect.CycleIntervalMode == "Custom" then
                         Runtime.Cycle.NextAt = os.clock() + Runtime.Cycle.intervalSeconds()
                     end
-                    saveConfig()
+                    saveCycleConfig()
                     Runtime.Cycle.status()
                 end,
             })
 
             Runtime.Controls.CycleMaster = tab:Toggle({
                 Title = "Cycle Reconnect",
-                Desc = "Jalankan fitur terpilih bergantian dan rejoin world setelah setiap interval.",
+                Desc = "Standby sampai Anda mengaktifkan fitur terpilih secara manual di tab Auto Farm.",
                 Value = Reconnect.CycleOn,
                 Callback = function(value)
                     if value == true then
-                        local ok, err = Runtime.Cycle.start(true)
+                        local ok, err = Runtime.Cycle.start()
                         if not ok then
                             Reconnect.CycleOn = false
                             if Runtime.Controls.CycleMaster then
                                 pcall(function() Runtime.Controls.CycleMaster:Set(false) end)
                             end
-                            saveConfig()
+                            saveCycleConfig()
                             Runtime.Cycle.status("Tidak aktif")
-                            notify("Cycle Reconnect", err or "Tidak dapat memulai cycle.", 5)
+                            notify("Cycle Reconnect", err or "Tidak dapat mengaktifkan standby.", 5)
                         end
                     else
                         Reconnect.CycleOn = false
+                        Runtime.Cycle.Token += 1
                         Runtime.Cycle.NextAt = 0
+                        Runtime.Cycle.CurrentFeature = nil
                         Runtime.Cycle.RestartRequested = false
                         Runtime.Cycle.PausedAt = nil
-                        saveConfig()
-                        Runtime.Cycle.status("Nonaktif · fitur yang sedang berjalan tidak dihentikan")
+                        Runtime.Cycle.WaitingForSingle = false
+                        if not Reconnect.Busy then Runtime.Cycle.Transitioning = false end
+                        Runtime.Cycle.standby("Nonaktif · aktivitas Auto Farm tidak diubah")
+                        saveCycleConfig()
                     end
                 end,
             })
@@ -24453,22 +24541,57 @@ loadConfig(true)
                         Runtime.Cycle.PausedAt = nil
                     end
 
-                    if Runtime.Cycle.RestartRequested and not guardPaused then
-                        Runtime.Cycle.RestartRequested = false
-                        Runtime.Cycle.start(true)
-                    elseif not guardPaused then
-                        if Runtime.Cycle.NextAt <= 0 then
-                            local features = Runtime.Cycle.features()
-                            local index = math.clamp(math.floor(tonumber(Reconnect.CycleIndex) or 1), 1, math.max(#features, 1))
-                            local expected = features[index]
-                            if expected and Runtime.Cycle.isFeatureActive(expected) then
-                                Runtime.Cycle.CurrentFeature = expected
-                                Runtime.Cycle.NextAt = os.clock() + Runtime.Cycle.intervalSeconds()
-                            elseif expected and currentWorld ~= "" then
-                                Runtime.Cycle.start(false)
+                    if not guardPaused then
+                        local cycleSnapshot = Runtime.Cycle.readSnapshot()
+                        local activeFeatures = Runtime.Cycle.activeFeatures(cycleSnapshot)
+
+                        if #activeFeatures == 0 then
+                            if Runtime.Cycle.NextAt > 0 or Runtime.Cycle.CurrentFeature ~= nil then
+                                Runtime.Cycle.standby(
+                                    "Standby · aktifkan fitur secara manual di Auto Farm",
+                                    cycleSnapshot
+                                )
+                            else
+                                Runtime.Cycle.rememberStates(cycleSnapshot)
+                                Runtime.Cycle.status()
                             end
-                        elseif os.clock() >= Runtime.Cycle.NextAt and not Reconnect.Busy then
-                            Runtime.Cycle.advance()
+                        elseif #activeFeatures > 1 then
+                            Runtime.Cycle.standby(
+                                "Aktifkan satu fitur Cycle pada satu waktu.",
+                                cycleSnapshot
+                            )
+                            Runtime.Cycle.WaitingForSingle = true
+                        else
+                            local feature = activeFeatures[1]
+                            local flag = Runtime.Cycle.flagFor(feature)
+                            local wasActive = Runtime.Cycle.ArmedStates[flag] == true
+
+                            if Runtime.Cycle.NextAt <= 0 then
+                                if not wasActive or Runtime.Cycle.WaitingForSingle then
+                                    Runtime.Cycle.CurrentFeature = feature
+                                    Runtime.Cycle.CycleWorld = tostring(cycleSnapshot.world or currentWorld or "")
+                                    Reconnect.CycleWorld = Runtime.Cycle.CycleWorld
+                                    Runtime.Cycle.NextAt = os.clock() + Runtime.Cycle.intervalSeconds()
+                                    Runtime.Cycle.WaitingForSingle = false
+                                    Runtime.Cycle.status()
+                                else
+                                    Runtime.Cycle.status(
+                                        "Standby · matikan lalu aktifkan kembali fitur terpilih di Auto Farm"
+                                    )
+                                end
+                            elseif feature ~= Runtime.Cycle.CurrentFeature then
+                                -- User manually switched to another selected feature.
+                                Runtime.Cycle.CurrentFeature = feature
+                                Runtime.Cycle.CycleWorld = tostring(cycleSnapshot.world or currentWorld or "")
+                                Reconnect.CycleWorld = Runtime.Cycle.CycleWorld
+                                Runtime.Cycle.NextAt = os.clock() + Runtime.Cycle.intervalSeconds()
+                                Runtime.Cycle.status()
+                            elseif os.clock() >= Runtime.Cycle.NextAt and not Reconnect.Busy then
+                                Runtime.Cycle.rememberStates(cycleSnapshot)
+                                Runtime.Cycle.advance()
+                            end
+
+                            Runtime.Cycle.rememberStates(cycleSnapshot)
                         end
                     end
                     Runtime.Cycle.status()
