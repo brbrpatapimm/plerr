@@ -6180,7 +6180,7 @@ for _, key in ipairs({ "__ByteHubOpus", "__GTFarm" }) do -- __GTFarm = nama vers
     G[key] = nil
 end
 local Session = {}
-Session.Build = "2026-11-22-cycle-reconnect-v92-rejoin-autosave"
+Session.Build = "2026-11-22-autoplant-unified-dropped-seed-v93"
 G.__ByteHubOpus = Session
 local function alive()
     return G.__ByteHubOpus == Session
@@ -10044,13 +10044,14 @@ function Drops.applyTaken(d, left)
     end
 end
 
-local function takeDrop(d)
+local function takeDrop(d, allowUnarmed)
     local worldTake = Refs.World and rawget(Refs.World, "takeDrop")
     if type(worldTake) ~= "function" and not TakeDropRemote then return false end
     if Supply.collectBlocked() or Harvest.dropProtected(d, Refs.World) then return false end
     if d.taking or d.pending or d.display or (d.n or 0) <= 0 then return false end
-    -- drop yang kamu buang sendiri belum boleh dipungut lagi (aturan game), kecuali gems
-    if d.armed == false and d.id ~= 112 then return false end
+    -- Fitur lain tetap mengikuti aturan pickup normal. Auto Plant dapat
+    -- meminta percobaan pickup untuk semua seed dropped tanpa filter armed.
+    if d.armed == false and d.id ~= 112 and allowUnarmed ~= true then return false end
     local now = os.clock()
     if DropFailUntil[d.uid] and now < DropFailUntil[d.uid] then return false end
 
@@ -19680,7 +19681,7 @@ local function plantRouteToSeed(matchesSeed, live)
     local drop = goalDrops[last and (last.y * w.w + last.x) or (sy * w.w + sx)]
     local arrived = playerState()
     if drop and arrived and arrived.grounded and (drop.n or 0) > 0
-        and drop.armed ~= false and abs(drop.x - arrived.x) < 0.9 and drop.y < arrived.y - 0.9
+        and abs(drop.x - arrived.x) < 0.9 and drop.y < arrived.y - 0.9
         and openAt(floor(arrived.x), floor(arrived.y - 0.475) - 1) then
         AutoInput.jump = true
         task.wait(0.15)
@@ -19697,6 +19698,7 @@ local function plantFetchSeedDrops(seedId, live)
     local wasActive = AutoInput.active
     local moveEpoch = beginPlantMove()
     local matchesSeed = plantSeedDropFilter(seedId)
+    local directAttempted = {}
 
     local function canFetch()
         if not live() then return false end
@@ -19710,6 +19712,65 @@ local function plantFetchSeedDrops(seedId, live)
         return canFetch() and invCount(seedId) <= 0
     end
 
+    -- Ambil seed yang cocok dari seluruh daftar drop world. Tidak membedakan
+    -- siapa yang menjatuhkan atau status armed. Jika server menolak percobaan
+    -- langsung, jalur gerak fisik di bawah tetap menjadi fallback.
+    local function takeDroppedSeedsDirect()
+        if not needsSeed() then return 0 end
+        pcall(findDropRefs, false)
+        local list = Drops.list
+        if type(list) ~= "table" then return 0 end
+
+        local wanted = tonumber(seedId) or seedId
+        local candidates = {}
+        for _, drop in pairs(list) do
+            if type(drop) == "table"
+                and (tonumber(drop.id) or drop.id) == wanted
+                and (tonumber(drop.n) or 0) > 0 then
+                candidates[#candidates + 1] = drop
+            end
+        end
+
+        local collected = 0
+        for _, drop in ipairs(candidates) do
+            if not needsSeed() then break end
+            local uid = drop.uid
+            if uid == nil or not directAttempted[uid] then
+                if uid ~= nil then directAttempted[uid] = true end
+                local before = invCount(seedId)
+                local callOK, result = pcall(takeDrop, drop, true)
+                if not callOK then
+                    AP_log("WARN", "Direct seed pickup gagal: " .. tostring(result))
+                end
+                local after = invCount(seedId)
+                if after > before then
+                    collected += after - before
+                elseif uid ~= nil then
+                    -- Lepas cooldown percobaan langsung agar fallback gerak
+                    -- dapat mencoba drop yang sama melalui sentuhan karakter.
+                    DropFailUntil[uid] = nil
+                    if type(Move.FetchFail) == "table" then Move.FetchFail[uid] = nil end
+                    if type(Move.FetchTry) == "table" then Move.FetchTry[uid] = nil end
+                end
+                task.wait(0.08)
+            end
+        end
+        return collected
+    end
+
+    local function clearSeedFetchFailures()
+        local wanted = tonumber(seedId) or seedId
+        for _, drop in pairs(Drops.list or {}) do
+            if type(drop) == "table"
+                and (tonumber(drop.id) or drop.id) == wanted
+                and (tonumber(drop.n) or 0) > 0 and drop.uid ~= nil then
+                DropFailUntil[drop.uid] = nil
+                if type(Move.FetchFail) == "table" then Move.FetchFail[drop.uid] = nil end
+                if type(Move.FetchTry) == "table" then Move.FetchTry[drop.uid] = nil end
+            end
+        end
+    end
+
     local okP, err = pcall(function()
         autoBegin()
         while canFetch() and alive() and os.clock() - t0 < 200 do
@@ -19717,14 +19778,23 @@ local function plantFetchSeedDrops(seedId, live)
             Move.Homing = true
             Move.HomingLive = canFetch
 
+            pcall(findDropRefs, false)
             local count = plantSeedDropCount(seedId)
             if not count or count == 0 then break end
+
             local before = invCount(seedId)
-            if needsSeed() then plantRouteToSeed(matchesSeed, canFetch) end
+            if needsSeed() then
+                takeDroppedSeedsDirect()
+            end
             if not canFetch() then break end
-            -- Auto Take Seed: seed dropped/floating tetap dianggap target,
-            -- termasuk drop yang masih armed=false. Jangan ubah aturan pickup
-            -- untuk collector/fitur lain.
+            if needsSeed() then
+                plantRouteToSeed(matchesSeed, canFetch)
+            end
+            if not canFetch() then break end
+
+            -- Fallback fisik tetap menyusuri world dan menyentuh setiap drop
+            -- seed yang cocok, termasuk drop yang belum armed.
+            clearSeedFetchFailures()
             Move.fetchDrops(canFetch, 999, matchesSeed, 30, 3, true)
             if not canFetch() then break end
 
@@ -19732,33 +19802,43 @@ local function plantFetchSeedDrops(seedId, live)
             if after > before then
                 stuck = 0
             elseif after > 0 then
-                -- Sudah bisa menanam. Jangan mondar-mandir jika sisa drop gagal dipungut.
                 break
             else
-                -- Menjauh hanya membantu drop sendiri yang belum aktif di dekat avatar.
                 local state = playerState()
                 if not state then break end
-                local unarmedNearby = false
+
+                local remainingDrops = {}
+                local wanted = tonumber(seedId) or seedId
                 for _, drop in pairs(Drops.list or {}) do
-                    if type(drop) == "table" and drop.armed == false and matchesSeed(drop)
-                        and (tonumber(drop.n) or 0) > 0 and type(drop.x) == "number"
-                        and type(drop.y) == "number" and abs(drop.x - state.x) <= 2.5
-                        and abs(drop.y - (state.y - 0.475)) <= 2.5 then
-                        unarmedNearby = true
+                    if type(drop) == "table"
+                        and (tonumber(drop.id) or drop.id) == wanted
+                        and (tonumber(drop.n) or 0) > 0 then
+                        remainingDrops[#remainingDrops + 1] = drop
+                    end
+                end
+                if #remainingDrops == 0 then break end
+
+                -- Reposisi diterapkan seragam pada semua seed dropped. Tidak
+                -- ada cabang berdasarkan pemilik atau status armed.
+                stuck += 1
+                if stuck > 8 then break end
+                clearSeedFetchFailures()
+
+                local nx, ny = startNode(state)
+                local movedAway = false
+                for _, dx in ipairs({ 4, -4, 5, -5, 3, -3 }) do
+                    if not needsSeed() or (plantSeedDropCount(seedId) or 0) == 0 then break end
+                    if walkTo(nx + dx, ny, 8, needsSeed) then
+                        movedAway = true
                         break
                     end
                 end
-                if not unarmedNearby then break end
-
-                stuck += 1
-                if stuck > 8 then break end
-                local nx, ny = startNode(state)
-                for _, dx in ipairs({ 4, -4, 5, -5, 3, -3 }) do
-                    if not needsSeed() or (plantSeedDropCount(seedId) or 0) == 0 then break end
-                    if walkTo(nx + dx, ny, 8, needsSeed) then break end
-                end
                 if not needsSeed() then break end
-                task.wait(0.5)
+                if not movedAway then
+                    task.wait(1)
+                else
+                    task.wait(0.5)
+                end
             end
         end
     end)
@@ -23141,7 +23221,8 @@ loadConfig(true)
             return connection
         end
 
-        local DEFAULT_LOADER_URL = "https://raw.githubusercontent.com/brbrpatapimm/plerr/main/NewUI_Second_92.lua"
+        local DEFAULT_LOADER_URL = "https://raw.githubusercontent.com/brbrpatapimm/plerr/main/NewUI_Second_93.lua"
+        local PREVIOUS_LOADER_URL_V92 = "https://raw.githubusercontent.com/brbrpatapimm/plerr/main/NewUI_Second_92.lua"
         local PREVIOUS_LOADER_URL_V91 = "https://raw.githubusercontent.com/brbrpatapimm/plerr/main/NewUI_Second_91.lua"
         local PREVIOUS_LOADER_URL_V90 = "https://raw.githubusercontent.com/brbrpatapimm/plerr/main/NewUI_Second_90.lua"
         local PREVIOUS_LOADER_URL_V89 = "https://raw.githubusercontent.com/brbrpatapimm/plerr/main/NewUI_Second_89.lua"
@@ -23153,6 +23234,7 @@ loadConfig(true)
         local function normalizeLoaderUrl(value)
             local url = tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
             if url == "" or url == LEGACY_LOADER_URL
+                or url == PREVIOUS_LOADER_URL_V92
                 or url == PREVIOUS_LOADER_URL_V91
                 or url == PREVIOUS_LOADER_URL_V90
                 or url == PREVIOUS_LOADER_URL_V89
