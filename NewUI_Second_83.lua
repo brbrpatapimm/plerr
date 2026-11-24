@@ -10770,12 +10770,14 @@ local function isDownWrapper(saved, key, ...)
     return OrigIsDown(saved, key, ...)
 end
 
--- Auto PnB fallback: gunakan adapter tombol executor yang sama dengan Auto Plant.
--- Ini memungkinkan PnB bergerak walau WorldMenu.isDown tidak diekspos Delta.
+-- Auto Farm/Factory fallback: gunakan adapter tombol executor yang sama dengan Auto Plant.
+-- Ini memungkinkan Factory, Harvest, dan PnB bergerak walau WorldMenu.isDown tidak diekspos Delta.
 local PnbDirectInput = {
     held = {},
     warned = false,
     modeLogged = false,
+    calibrating = false,
+    calibrated = false,
 }
 
 local function pnbDirectInputAvailable()
@@ -10783,6 +10785,8 @@ local function pnbDirectInputAvailable()
     return type(runtime) == "table"
         and type(runtime.setKey) == "function"
         and type(runtime.keyMap) == "table"
+        and ((type(keypress) == "function" and type(keyrelease) == "function")
+            or runtime.VirtualInputManager ~= nil)
 end
 
 local function pnbSetDirectKey(name, isDown)
@@ -10802,6 +10806,9 @@ local function pnbReleaseDirectInput()
 end
 
 local function pnbSyncDirectInput()
+    if PnbDirectInput.calibrating then
+        return
+    end
     -- Jika hook game tersedia, gunakan hook biasa dan jangan kirim input ganda.
     if type(OrigIsDown) == "function" or not AutoInput.active then
         pnbReleaseDirectInput()
@@ -10811,14 +10818,14 @@ local function pnbSyncDirectInput()
     if not pnbDirectInputAvailable() then
         if not PnbDirectInput.warned then
             PnbDirectInput.warned = true
-            warn("[ByteHub] Auto PnB: adapter input langsung executor tidak tersedia.")
+            warn("[ByteHub] Auto Farm/Factory: adapter input langsung executor tidak tersedia.")
         end
         return
     end
 
     if not PnbDirectInput.modeLogged then
         PnbDirectInput.modeLogged = true
-        print("[ByteHub] Auto PnB menggunakan fallback input executor.")
+        print("[ByteHub] Auto Farm/Factory menggunakan fallback input executor.")
     end
 
     -- Auto Plant telah mengalibrasi keyMap ini (Arrow/WASD/Space-S).
@@ -10851,7 +10858,7 @@ end
 
 function Session.bindMovementMenu()
     if type(MenuModule) ~= "table" or not Session.isMovementMenu(MenuModule) then
-        Session.MovementInputReady = false
+        Session.MovementInputReady = pnbDirectInputAvailable()
         return false
     end
 
@@ -10881,7 +10888,7 @@ function Session.bindMovementMenu()
     end
 
     OrigIsDown = nil
-    Session.MovementInputReady = false
+    Session.MovementInputReady = pnbDirectInputAvailable()
     return false
 end
 
@@ -10914,9 +10921,14 @@ task.spawn(function()
     end
 
     if alive() and not OrigIsDown then
-        local detail = Session.ModuleScan and Session.ModuleScan.MovementError
-        warn("[ByteHub] Kontrol gerak belum tersedia: WorldMenu.isDown."
-            .. (detail and (" Detail: " .. tostring(detail)) or ""))
+        if pnbDirectInputAvailable() then
+            Session.MovementInputReady = true
+            print("[ByteHub] WorldMenu.isDown tidak tersedia; menggunakan fallback input executor.")
+        else
+            local detail = Session.ModuleScan and Session.ModuleScan.MovementError
+            warn("[ByteHub] Kontrol gerak belum tersedia: WorldMenu.isDown."
+                .. (detail and (" Detail: " .. tostring(detail)) or ""))
+        end
     end
 end)
 
@@ -12842,7 +12854,97 @@ function Move.fetchDrops(live, maxDist, filter, maxSec, retrySingleDelay, allowU
     return got
 end
 
+function PnbDirectInput.ensureCalibrated()
+    if type(OrigIsDown) == "function" or not pnbDirectInputAvailable() then
+        return true
+    end
+    local runtime = executorEnv.__ByteHubAutoPlantRuntime
+    if PnbDirectInput.calibrated or (runtime.xPositiveKey ~= nil and runtime.yPositiveKey ~= nil) then
+        PnbDirectInput.calibrated = true
+        return true
+    end
+    if type(runtime.axisBindings) ~= "table" then
+        PnbDirectInput.calibrated = true
+        return true
+    end
+    if PnbDirectInput.calibrating then
+        return false
+    end
+    local s0 = playerState()
+    if not s0 or s0.dead then
+        return false
+    end
+
+    PnbDirectInput.calibrating = true
+    pnbReleaseDirectInput()
+
+    pcall(function()
+        local function calibrateAxis(axis)
+            local posName = axis == "X" and "Right" or "Up"
+            local negName = axis == "X" and "Left" or "Down"
+            local origPos = runtime.keyMap[posName]
+            local origNeg = runtime.keyMap[negName]
+            local bindings = runtime.axisBindings[axis]
+            if type(bindings) ~= "table" then return false end
+
+            for _, binding in ipairs(bindings) do
+                runtime.keyMap[posName] = binding.positive
+                runtime.keyMap[negName] = binding.negative
+                for _, logicalKey in ipairs({ posName, negName }) do
+                    local sBefore = playerState()
+                    local before = sBefore and (axis == "X" and sBefore.x or sBefore.y)
+                    if type(before) == "number" and pnbSetDirectKey(logicalKey, true) then
+                        local bestCoord = before
+                        local deadline = os.clock() + 0.20
+                        while os.clock() < deadline do
+                            task.wait(0.025)
+                            local curS = playerState()
+                            local sample = curS and (axis == "X" and curS.x or curS.y)
+                            if type(sample) == "number" and abs(sample - before) > abs(bestCoord - before) then
+                                bestCoord = sample
+                            end
+                        end
+                        pnbSetDirectKey(logicalKey, false)
+                        task.wait(0.04)
+                        local sAfter = playerState()
+                        local after = sAfter and (axis == "X" and sAfter.x or sAfter.y)
+                        if type(after) == "number" and abs(after - before) > abs(bestCoord - before) then
+                            bestCoord = after
+                        end
+                        local delta = bestCoord - before
+                        if abs(delta) > 0.015 then
+                            if axis == "X" then
+                                runtime.xPositiveKey = (delta > 0) and logicalKey or ((logicalKey == posName) and negName or posName)
+                            else
+                                runtime.yPositiveKey = (delta > 0) and logicalKey or ((logicalKey == posName) and negName or posName)
+                            end
+                            return true
+                        end
+                    else
+                        pnbSetDirectKey(logicalKey, false)
+                    end
+                end
+            end
+
+            runtime.keyMap[posName] = origPos
+            runtime.keyMap[negName] = origNeg
+            return false
+        end
+
+        if not runtime.xPositiveKey then calibrateAxis("X") end
+        if not runtime.yPositiveKey then calibrateAxis("Y") end
+    end)
+
+    PnbDirectInput.calibrating = false
+    pnbReleaseDirectInput()
+    PnbDirectInput.calibrated = true
+    return true
+end
+
 local function autoBegin()
+    if type(OrigIsDown) ~= "function" and pnbDirectInputAvailable() and not PnbDirectInput.calibrated then
+        pcall(PnbDirectInput.ensureCalibrated)
+    end
     AutoInput.active = true
     releaseInput()
     Reach = nil
@@ -13294,7 +13396,7 @@ end
 local function checkAutoStart()
     if not Refs.World then return "Data world belum ketemu. Tekan 'Hubungkan ke game'" end
     if not Refs.Punch then return "Fungsi pukul game belum ketemu. Tekan 'Hubungkan ke game'" end
-    if not OrigIsDown then return "Kontrol gerak game (WorldMenu.isDown) tidak ketemu" end
+    if not pnbMovementAvailable() then return "Kontrol gerak game (WorldMenu.isDown) tidak ketemu" end
     if not playerState() then return "Kamu belum masuk world" end
     return nil
 end
@@ -14148,7 +14250,7 @@ local function spliceRoamLoop(runId)
 end
 
 local function startSpliceRoam()
-    if not OrigIsDown then return "Kontrol gerak game (WorldMenu.isDown) tidak ketemu" end
+    if not pnbMovementAvailable() then return "Kontrol gerak game (WorldMenu.isDown) tidak ketemu" end
     table.clear(Splice.Row)
     if not playerState() then return "Kamu belum masuk world" end
     if not Refs.Trees then findTreeRefs() end
@@ -15344,7 +15446,7 @@ do
         if frontX < 0 or frontX >= w.w or not openAt(frontX, AutoDrop.Y) then
             return "Tile di depan posisi drop terhalang"
         end
-        if not OrigIsDown then return "Kontrol gerak game belum ketemu" end
+        if not pnbMovementAvailable() then return "Kontrol gerak game belum ketemu" end
         if not Refs.Hud or type(rawget(Refs.Hud, "onDrop")) ~= "function" then return "Fungsi drop game belum ketemu" end
         return nil
     end
@@ -15830,7 +15932,7 @@ function Pabrik.start()
     local block = blockOfSeed(Pabrik.SeedId)
     if not Refs.World then
         err = "Data world belum ketemu. Tekan 'Hubungkan ke game'"
-    elseif not OrigIsDown then
+    elseif not pnbMovementAvailable() then
         err = "Kontrol gerak game (WorldMenu.isDown) tidak ketemu"
     elseif not playerState() then
         err = "Kamu belum masuk world"
@@ -16537,7 +16639,7 @@ function Vend.start()
     local err
     if not Refs.World then
         err = "Data world belum ketemu. Tekan 'Hubungkan ke game'"
-    elseif not OrigIsDown then
+    elseif not pnbMovementAvailable() then
         err = "Kontrol gerak game (WorldMenu.isDown) tidak ketemu"
     elseif not playerState() then
         err = "Kamu belum masuk world"
@@ -17493,7 +17595,7 @@ function Build.start()
     local it = Build.BlockId and ItemDB[Build.BlockId]
     if not Refs.World then
         err = "Data world belum ketemu. Tekan 'Hubungkan ke game'"
-    elseif not OrigIsDown then
+    elseif not pnbMovementAvailable() then
         err = "Kontrol gerak game (WorldMenu.isDown) tidak ketemu"
     elseif not playerState() then
         err = "Kamu belum masuk world"
@@ -22109,7 +22211,7 @@ end
 -- Pilih rute dengan biaya terendah ke pijakan dalam jendela tanam.
 local function plantWalkTo(ty, columns, live)
     local w = Refs.World
-    if not w or not OrigIsDown or not live() then return false end
+    if not w or not pnbMovementAvailable() or not live() then return false end
 
     local moveEpoch = beginPlantMove()
     Move.Homing = true
@@ -22184,7 +22286,7 @@ end
 -- dari baris lain). Callback bisa menghentikan sapuan untuk stok atau tile terlewat.
 local function plantRunRow(ty, toX, dirtId, onColumn, live)
     local w = Refs.World
-    if not w or not OrigIsDown then return "nobridge" end
+    if not w or not pnbMovementAvailable() then return "nobridge" end
     live = live or function() return true end
     local wasActive = AutoInput.active
     local moveEpoch = beginPlantMove()
@@ -22475,7 +22577,7 @@ end
 
 executorEnv.__plantBridge = {
     ready = function()
-        return Refs.World ~= nil and OrigIsDown ~= nil
+        return Refs.World ~= nil and pnbMovementAvailable()
     end,
     world = function()
         return Refs.World
