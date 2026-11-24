@@ -849,6 +849,7 @@ local TAB_GROUP_CHILD_ORDER = {
 	["Auto Harvest"] = 1,
 	["Auto PnB"] = 2,
 	["Auto Plant"] = 3,
+	["Factory"] = 4,
 
 	["UI/UX"] = 1,
 	["General"] = 2,
@@ -873,7 +874,7 @@ local function ensureTabGroup(name, order)
 	if tabGroups[name] then return tabGroups[name] end
 
 	local headerHeight = 38
-	local childCount = (name == "Setting") and 5 or 3
+	local childCount = (name == "Setting") and 5 or ((name == "Auto Farm") and 4 or 3)
 	local childHeight = childCount * 34 + math.max(0, childCount - 1) * 4 + 6
 	local frame = new("Frame", {
 		Name = "TabGroup_" .. name:gsub("%W", ""),
@@ -979,7 +980,7 @@ end
 local function createTab(name, groupName)
 	tabOrderCount += 1
 	local order = tabOrderCount
-	local compactTab = name == "Auto PnB" or name == "Auto Plant" or name == "Auto Harvest"
+	local compactTab = name == "Auto PnB" or name == "Auto Plant" or name == "Auto Harvest" or name == "Factory"
 	local group = groupName and ensureTabGroup(groupName, order) or nil
 	local buttonParent = group and group.childHolder or tabList
 	local buttonHeight = group and 34 or 40
@@ -2400,6 +2401,7 @@ local plantState = {
     delay = PlantConfig.DefaultDelay,
     runSeedId = nil,
     selectedSeedId = nil,
+    selectedSeedName = nil,
     mode = "Bottom to Top",
     autoTakeSeed = true,
     processed = 0,
@@ -4078,7 +4080,9 @@ scanSeedInventory = function()
             executorEnv.__ByteHubAutoPlantRuntime.lastInventoryDiagnosticSignature = diagnosticSignature
         end
 
-        if signature ~= lastInventorySignature then
+        local mismatchSelection = plantState.selectedSeedId ~= nil
+            and (not selectedSeed or tostring(selectedSeed.Id) ~= tostring(plantState.selectedSeedId))
+        if signature ~= lastInventorySignature or mismatchSelection then
             local options = {}
             local preferredLabel
             seedByLabel = {}
@@ -4088,11 +4092,39 @@ scanSeedInventory = function()
                 table.insert(options, option)
                 seedByLabel[option] = seed
 
-                if selectedSeed and tostring(selectedSeed.Id) == tostring(seed.Id) then
+                if plantState.selectedSeedId ~= nil then
+                    if tostring(plantState.selectedSeedId) == tostring(seed.Id) then
+                        preferredLabel = option
+                    end
+                elseif selectedSeed and tostring(selectedSeed.Id) == tostring(seed.Id) then
                     preferredLabel = option
-                elseif not selectedSeed and plantState.selectedSeedId ~= nil
-                    and tostring(plantState.selectedSeedId) == tostring(seed.Id) then
-                    preferredLabel = option
+                end
+            end
+
+            if not preferredLabel and plantState.selectedSeedId ~= nil then
+                if type(plantState.selectedSeedName) == "string" and plantState.selectedSeedName ~= "" then
+                    for _, seed in ipairs(found) do
+                        if tostring(seed.Name) == tostring(plantState.selectedSeedName) then
+                            preferredLabel = seedOptionLabel(seed)
+                            plantState.selectedSeedId = seed.Id
+                            break
+                        end
+                    end
+                end
+                if not preferredLabel then
+                    local placeholderName = tostring(
+                        plantState.selectedSeedName or ("Seed #" .. tostring(plantState.selectedSeedId))
+                    )
+                    local placeholderLabel = placeholderName .. "  x0 (tersimpan)"
+                    seedByLabel[placeholderLabel] = {
+                        Id = plantState.selectedSeedId,
+                        Name = placeholderName,
+                        Count = 0,
+                        WorldCount = 0,
+                        SavedPlaceholder = true,
+                    }
+                    table.insert(options, 1, placeholderLabel)
+                    preferredLabel = placeholderLabel
                 end
             end
 
@@ -4101,7 +4133,14 @@ scanSeedInventory = function()
                 local chosenLabel = seedDropdown:Get()
                 selectedSeedLabel = chosenLabel
                 selectedSeed = chosenLabel and seedByLabel[chosenLabel] or nil
-                if selectedSeed then plantState.selectedSeedId = selectedSeed.Id end
+                if selectedSeed then
+                    if plantState.selectedSeedId == nil then
+                        plantState.selectedSeedId = selectedSeed.Id
+                    end
+                    if not selectedSeed.SavedPlaceholder then
+                        plantState.selectedSeedName = selectedSeed.Name
+                    end
+                end
             else
                 seedDropdown:SetOptions({}, nil)
                 selectedSeedLabel = nil
@@ -4111,9 +4150,11 @@ scanSeedInventory = function()
             lastInventorySignature = signature
         else
             local matchedSeed = nil
-            if selectedSeed then
+            local targetId = (plantState.selectedSeedId ~= nil and plantState.selectedSeedId)
+                or (selectedSeed and selectedSeed.Id)
+            if targetId ~= nil then
                 for _, seed in ipairs(found) do
-                    if tostring(seed.Id) == tostring(selectedSeed.Id) then
+                    if tostring(seed.Id) == tostring(targetId) then
                         matchedSeed = seed
                         break
                     end
@@ -4122,10 +4163,23 @@ scanSeedInventory = function()
             if matchedSeed then
                 selectedSeed = matchedSeed
                 plantState.selectedSeedId = matchedSeed.Id
+                plantState.selectedSeedName = matchedSeed.Name
+            elseif plantState.selectedSeedId ~= nil then
+                local placeholderName = tostring(
+                    plantState.selectedSeedName or ("Seed #" .. tostring(plantState.selectedSeedId))
+                )
+                local placeholderLabel = placeholderName .. "  x0 (tersimpan)"
+                selectedSeedLabel = placeholderLabel
+                selectedSeed = seedByLabel[placeholderLabel] or {
+                    Id = plantState.selectedSeedId,
+                    Name = placeholderName,
+                    Count = 0,
+                    WorldCount = 0,
+                    SavedPlaceholder = true,
+                }
             elseif selectedSeed then
                 selectedSeed = nil
                 selectedSeedLabel = nil
-                plantState.selectedSeedId = nil
             end
         end
 
@@ -4185,6 +4239,8 @@ seedDropdown = UI.Dropdown(pAuto, {
         selectedSeedLabel = label
         selectedSeed = seedByLabel[label]
         plantState.selectedSeedId = selectedSeed and selectedSeed.Id or nil
+        plantState.selectedSeedName = selectedSeed and selectedSeed.Name or nil
+        if plantState.saveRealtime then pcall(plantState.saveRealtime) end
 
         if selectedSeed then
             local msg = selectedSeed.Name .. "  x" .. tostring(selectedSeed.Count)
@@ -4216,6 +4272,7 @@ plantState.controls.delay = UI.Slider(pAuto, {
     Suffix = "s",
     Callback = function(value)
         plantState.delay = value
+        if plantState.saveRealtime then pcall(plantState.saveRealtime) end
     end,
 })
 
@@ -4237,6 +4294,7 @@ do
             end
 
             plantState.mode = value
+            if plantState.saveRealtime then pcall(plantState.saveRealtime) end
             notify({
                 Title = "Mode Penanaman",
                 Text = tostring(value),
@@ -4252,6 +4310,7 @@ plantState.controls.autoTakeSeed = UI.Toggle(pAuto, {
     Default = true,
     Callback = function(enabled)
         plantState.autoTakeSeed = enabled and true or false
+        if plantState.saveRealtime then pcall(plantState.saveRealtime) end
     end,
 })
 
@@ -4267,8 +4326,81 @@ function plantState.normalizeSettings()
     plantState.autoTakeSeed = plantState.autoTakeSeed == true
 end
 
+do (function()
+    local SETTINGS_FILE = "ByteHub/autoplant_" .. tostring(player.UserId) .. "_" .. tostring(game.PlaceId) .. ".json"
+    local function ensureFolder()
+        if type(isfolder) == "function" and type(makefolder) == "function" then
+            local ok, exists = pcall(isfolder, "ByteHub")
+            if ok and not exists then pcall(makefolder, "ByteHub") end
+        end
+    end
+
+    function plantState.saveRealtime()
+        pcall(plantState.normalizeSettings)
+        local payload = {
+            Schema = 1,
+            UserId = player.UserId,
+            PlaceId = game.PlaceId,
+            SavedAt = os.time(),
+            selectedSeedId = plantState.selectedSeedId,
+            selectedSeedName = plantState.selectedSeedName,
+            delay = plantState.delay,
+            mode = plantState.mode,
+            autoTakeSeed = plantState.autoTakeSeed,
+        }
+        local wrote = false
+        if type(writefile) == "function" then
+            ensureFolder()
+            local okEnc, encoded = pcall(HttpService.JSONEncode, HttpService, payload)
+            if okEnc and type(encoded) == "string" then
+                local okW, resW = pcall(writefile, SETTINGS_FILE, encoded)
+                wrote = okW and resW ~= false
+            end
+        end
+        if type(executorEnv.__ByteHubQueueConfigSave) == "function" then
+            pcall(executorEnv.__ByteHubQueueConfigSave, executorEnv.__ByteHubSliderActive ~= true)
+        end
+        return wrote
+    end
+
+    function plantState.loadRealtime()
+        if type(isfile) ~= "function" or type(readfile) ~= "function" then return false end
+        local okEx, exists = pcall(isfile, SETTINGS_FILE)
+        if not okEx or not exists then return false end
+        local okRd, raw = pcall(readfile, SETTINGS_FILE)
+        if not okRd or type(raw) ~= "string" then return false end
+        local okDec, data = pcall(HttpService.JSONDecode, HttpService, raw)
+        if not okDec or type(data) ~= "table"
+            or data.Schema ~= 1
+            or tonumber(data.UserId) ~= player.UserId
+            or tonumber(data.PlaceId) ~= game.PlaceId then
+            return false
+        end
+        if data.selectedSeedId ~= nil then
+            plantState.selectedSeedId = data.selectedSeedId
+        end
+        if type(data.selectedSeedName) == "string" and data.selectedSeedName ~= "" then
+            plantState.selectedSeedName = data.selectedSeedName
+        end
+        if tonumber(data.delay) then plantState.delay = tonumber(data.delay) end
+        if type(data.mode) == "string" then plantState.mode = data.mode end
+        if data.autoTakeSeed ~= nil then plantState.autoTakeSeed = data.autoTakeSeed == true end
+        pcall(plantState.normalizeSettings)
+        return true
+    end
+
+    if type(executorEnv.__ByteHubAutoPlantRuntime) == "table" then
+        executorEnv.__ByteHubAutoPlantRuntime.state = plantState
+        executorEnv.__ByteHubAutoPlantRuntime.seedDropdown = seedDropdown
+    end
+end)() end
+
 function plantState.syncControls()
     pcall(plantState.normalizeSettings)
+    if type(executorEnv.__ByteHubAutoPlantRuntime) == "table" then
+        executorEnv.__ByteHubAutoPlantRuntime.state = plantState
+        executorEnv.__ByteHubAutoPlantRuntime.seedDropdown = seedDropdown
+    end
     local controls = plantState.controls or {}
     if controls.delay then pcall(controls.delay.Set, controls.delay, plantState.delay, true) end
     if controls.mode then pcall(controls.mode.Set, controls.mode, plantState.mode, true) end
@@ -4278,6 +4410,22 @@ function plantState.syncControls()
     -- Inventory scan runs before the config loader; force one refresh so a
     -- persisted seed ID can be selected after the saved settings are applied.
     if plantState.selectedSeedId ~= nil then
+        if seedDropdown and seedDropdown:Get() == nil then
+            local placeholderName = tostring(
+                plantState.selectedSeedName or ("Seed #" .. tostring(plantState.selectedSeedId))
+            )
+            local placeholderLabel = placeholderName .. "  x0 (tersimpan)"
+            seedByLabel[placeholderLabel] = seedByLabel[placeholderLabel] or {
+                Id = plantState.selectedSeedId,
+                Name = placeholderName,
+                Count = 0,
+                WorldCount = 0,
+                SavedPlaceholder = true,
+            }
+            selectedSeedLabel = placeholderLabel
+            selectedSeed = seedByLabel[placeholderLabel]
+            pcall(seedDropdown.Set, seedDropdown, placeholderLabel, true)
+        end
         lastInventorySignature = nil
         if scanSeedInventory then task.defer(scanSeedInventory) end
     end
@@ -4962,6 +5110,32 @@ executorEnv.__ByteHubAutoPlantRuntime.scanWorker = function(runId)
     local remaining = 0
     local routeFailures = 0
     local lastPlantTile = nil
+    local skipBottomFloorY = nil
+
+    if plantState.skipBottomRow == true then
+        local firstFloorY = nil
+        local floorCount = 0
+        for y = world.h - 2, 0, -1 do
+            local rowHasFloor = false
+            for x = 0, world.w - 1 do
+                if executorEnv.__ByteHubAutoPlantRuntime.seedTileState(world, x, y) ~= nil then
+                    rowHasFloor = true
+                    break
+                end
+            end
+            if rowHasFloor then
+                floorCount += 1
+                if firstFloorY == nil then
+                    firstFloorY = y
+                else
+                    break
+                end
+            end
+        end
+        if floorCount >= 2 then
+            skipBottomFloorY = firstFloorY
+        end
+    end
 
     local function markTargetDone(target, planted, reason)
         if not pending[target.key] then
@@ -5004,6 +5178,9 @@ executorEnv.__ByteHubAutoPlantRuntime.scanWorker = function(runId)
     end
 
     local function addTarget(x, y, retrySkipped)
+        if skipBottomFloorY ~= nil and y == skipBottomFloorY then
+            return nil
+        end
         local key = y * world.w + x
         local target = targetByKey[key]
         local itemId, supportId, skipReason = plantableTile(x, y)
@@ -5056,6 +5233,9 @@ executorEnv.__ByteHubAutoPlantRuntime.scanWorker = function(runId)
     end
 
     local function scanRow(y, retrySkipped)
+        if skipBottomFloorY ~= nil and y == skipBottomFloorY then
+            return
+        end
         for x = 0, world.w - 1 do
             addTarget(x, y, retrySkipped)
         end
@@ -5290,6 +5470,7 @@ executorEnv.__ByteHubAutoPlantRuntime.scanWorker = function(runId)
         if not live() or refilling or returningToMiss then return end
         local col, row = currentTile()
         if col == nil or row == nil then return end
+        if skipBottomFloorY ~= nil and row == skipBottomFloorY then return end
         local now = os.clock()
         for dx = -1, 1 do
             if not live() or refilling or returningToMiss then break end
@@ -6180,7 +6361,7 @@ for _, key in ipairs({ "__ByteHubOpus", "__GTFarm" }) do -- __GTFarm = nama vers
     G[key] = nil
 end
 local Session = {}
-Session.Build = "2026-11-22-autoplant-unified-dropped-seed-v93"
+Session.Build = "2026-11-22-autoplant-stable-seed-target-v95"
 G.__ByteHubOpus = Session
 local function alive()
     return G.__ByteHubOpus == Session
@@ -7392,7 +7573,7 @@ Session.References = Refs
 -- Daftar drop di world (diambil dari game)
 local Drops = { list = nil, update = nil, brokeAt = {} }
 -- Animasi aksi: fungsi gambar tangan game + nomor upvalue "aksi terakhir" (diisi saat hubungkan)
-local Anim = { fn = nil, idx = nil, set = nil }
+local Anim = { fn = nil, idx = nil, set = nil, ctx = nil }
 local DropFailUntil = {}   -- drop yang ditolak, dicoba lagi nanti
 
 local UI = { Tabs = {}, DropdownTabs = {}, PendingDropdowns = {} }
@@ -8602,9 +8783,9 @@ do (function() -- scope terpisah agar tidak menambah local utama script
         return true
     end
 
-    executorEnv.__ByteHubQueueConfigSave = function()
+    executorEnv.__ByteHubQueueConfigSave = function(force)
         if Config and type(Config.requestSave) == "function" then
-            return Config.requestSave()
+            return Config.requestSave(force == true)
         end
         return false
     end
@@ -8802,13 +8983,52 @@ Config.add("Harvest", Harvest, {
     "Order", "CollectOn", "CollectRadius", "DropOn", "DropSeedOn", "DropAt",
     "DropX", "DropY", "DropWorld", "Facing", "HitMs", "DropGuardSec",
 })
+Session.Factory = {
+    On = false,
+    Running = false,
+    WorkerActive = false,
+    RunId = 0,
+    Phase = "Mati",
+    Status = "Mati",
+    BlockId = nil,
+    SeedId = nil,
+    TrackedBlocks = {},
+    SafeDist = 3,
+    BlockLimit = 200,
+    SeedDropAt = 200,
+    DropX = -1,
+    DropY = -1,
+    DropWorld = "",
+    DropFacing = 1,
+    DropGuardSec = 2.5,
+    PnbX = -1,
+    PnbY = -1,
+    Planting = false,
+    Harvesting = false,
+    Cycles = 0,
+    SeedsDropped = 0,
+    BlocksBroken = 0,
+    SavedHarvest = nil,
+    RotationOn = false,
+    RotationWorldsText = "",
+    RotationIndex = 1,
+    RotationDelaySec = 3,
+    RotationStatus = "Nonaktif",
+    Rotating = false,
+}
+Config.add("Factory", Session.Factory, {
+    "SafeDist", "BlockLimit", "SeedDropAt",
+    "DropX", "DropY", "DropWorld", "DropFacing", "DropGuardSec",
+    "RotationOn", "RotationWorldsText", "RotationIndex", "RotationDelaySec",
+})
 Config.add("WorldFinder", WorldFinder, { "Mode", "Custom", "Manual", "Limit", "DelaySec", "WebhookEach" })
 Config.add("Pabrik", Pabrik, {
     "SeedId", "WholeWorld", "Tiles", "BreakX", "BreakY",
     "Drop", "Keep", "DropAt", "DropWorld", "DropX", "DropY",
 })
 Config.add("Bahasa", I18N, { "Saved", "Ask", "Chosen" })
-Config.add("AutoPlant", plantState, { "delay", "mode", "autoTakeSeed", "selectedSeedId" })
+Config.add("AutoPlant", plantState, { "delay", "mode", "autoTakeSeed", "selectedSeedId", "selectedSeedName" })
+if plantState.loadRealtime then pcall(plantState.loadRealtime) end
 if plantState.syncControls then pcall(plantState.syncControls) end
 do
     local teleport = game:GetService("TeleportService")
@@ -9035,9 +9255,69 @@ function Anim.isArmFn(fn)
     return a and b and c
 end
 
+function Anim.isCtx(v)
+    return type(v) == "table"
+        and type(rawget(v, "ARM_OUT")) == "number" and rawget(v, "ARM_OUT") > 0
+        and type(rawget(v, "ARM_HOLD")) == "number" and rawget(v, "ARM_HOLD") > 0
+        and type(rawget(v, "aimArm")) == "function"
+        and type(rawget(v, "world")) == "table"
+end
+
+function Anim.findCtx()
+    if Anim.isCtx(Anim.ctx) and (not Refs.World or rawget(Anim.ctx, "world") == Refs.World) then
+        return Anim.ctx
+    end
+    local fallback
+    for _, fn in ipairs({ Refs.State or false, Refs.Punch or false, Refs.SetTile or false, Refs.Arm or false, Anim.fn or false }) do
+        if type(fn) == "function" then
+            for _, u in pairs(getUpvalues(fn)) do
+                if Anim.isCtx(u) then
+                    if not Refs.World or rawget(u, "world") == Refs.World then
+                        Anim.ctx = u
+                        return u
+                    elseif not fallback then
+                        fallback = u
+                    end
+                end
+            end
+        end
+    end
+    local filter = filtergc or filter_gc
+    if type(filter) == "function" then
+        local ok, hits = pcall(filter, "table", { Keys = { "ARM_OUT", "ARM_HOLD", "px", "py" } }, false)
+        if ok and type(hits) == "table" then
+            for _, cand in pairs(hits) do
+                if Anim.isCtx(cand) then
+                    if not Refs.World or rawget(cand, "world") == Refs.World then
+                        Anim.ctx = cand
+                        return cand
+                    elseif not fallback then
+                        fallback = cand
+                    end
+                end
+            end
+        end
+    end
+    if fallback and not Refs.World then
+        Anim.ctx = fallback
+        return fallback
+    end
+    return nil
+end
+
 -- Cari nomor upvalue "aksi terakhir" (tabel {t, x, y, facing} atau nil) di fungsi tangan.
 -- Upvalue ini dipakai bersama oleh kode input & gambar karakter game, jadi cukup diganti sekali.
 function Anim.bind(fn)
+    for _, u in pairs(getUpvalues(fn)) do
+        if Anim.isCtx(u) and (not Refs.World or rawget(u, "world") == Refs.World) then
+            Anim.ctx = u
+            Anim.fn, Anim.idx, Anim.set = fn, nil, nil
+            Anim.BindName = "ctx.action"
+            Anim.BindReason = nil
+            return true
+        end
+    end
+
     local debugGet = debug and debug.getupvalue
     local gu = debugGet or getupvalue
     local su = (debug and debug.setupvalue) or setupvalue
@@ -9191,6 +9471,9 @@ end
 function Anim.consider(v, trusted)
     local tv = type(v)
     if tv == "table" then
+        if not Anim.ctx and Anim.isCtx(v) and (not Refs.World or rawget(v, "world") == Refs.World) then
+            Anim.ctx = v
+        end
         if not Refs.World then
             local ok, isWorld = pcall(Anim.isWorld, v)
             if ok and isWorld then Refs.World = v end
@@ -9278,7 +9561,7 @@ function Anim.walkRefs(roots, limit)
 
         -- Gunakan signature tangan yang sama dengan referensi: forearm, heldReach, punchReach.
         -- Cari fungsi tersebut pada setiap tingkat closure, bukan hanya upvalue callback terluar.
-        if type(value) == "function" and not Anim.fn then
+        if type(value) == "function" and not (Anim.ctx or Anim.fn) then
             local okArm, isArm = pcall(Anim.isArmFn, value)
             if okArm and isArm then
                 Refs.Arm = value
@@ -9287,7 +9570,7 @@ function Anim.walkRefs(roots, limit)
             end
         end
 
-        if Refs.Inv and Refs.World and Refs.Punch and Refs.SetTile and Refs.State and Refs.Menu and Anim.fn then
+        if Refs.Inv and Refs.World and Refs.Punch and Refs.SetTile and Refs.State and Refs.Menu and (Anim.ctx or Anim.fn) then
             break
         end
 
@@ -9672,8 +9955,8 @@ local function sendSetTile(layer, x, y, id)
 end
 
 local function sendHitFx(x, y)
-    if NetOk and type(Net) == "table" and Net.act then
-        pcall(Net.act.send, { x = x + 0.5, y = y + 0.5 })
+    if NetOk and type(Net) == "table" and type(Net.act) == "table" and type(Net.act.send) == "function" then
+        pcall(Net.act.send, { kind = 1, x = x + 0.5, y = y + 0.5 })
     end
 end
 
@@ -9816,6 +10099,13 @@ local TakeDropRemote = WorldRemotes and WorldRemotes:FindFirstChild("TakeDrop") 
 -- Fungsi tangan game dipanggil dari fungsi gambar yang terhubung ke RenderStepped:
 -- cukup periksa upvalue fungsi-fungsi itu (jauh lebih ringan dari scan getgc).
 function Anim.findFast()
+    if Anim.ctx and Anim.isCtx(Anim.ctx) and (not Refs.World or rawget(Anim.ctx, "world") == Refs.World) then
+        return true
+    end
+    if Anim.findCtx() then
+        Anim.BindReason = nil
+        return true
+    end
     if Anim.fn then return true end
     if type(getconnections) ~= "function" then
         Anim.BindReason = "getconnections tidak tersedia"
@@ -9896,7 +10186,7 @@ function Anim.quickRefs()
     Refs.ConnectionCount = Anim.walkRefs(roots, 900)
 
     -- Jika world/menu belum terhubung, referensi juga memeriksa callback remote game.
-    if not Refs.World or not (Refs.MovementMenu or Session.MovementMenu) or not Anim.fn then
+    if not Refs.World or not (Refs.MovementMenu or Session.MovementMenu) or not (Anim.ctx or Anim.fn) then
         table.clear(roots)
         local folders = { ReplicatedStorage:FindFirstChild("WorldRemotes") or false, ReplicatedStorage }
         for _, folder in ipairs(folders) do
@@ -10939,13 +11229,22 @@ function UI.RefillLoop(runId)
                 task.wait(0.1)
                 continue
             end
-            stopFarm("Block " .. itemName(farmBlock()) .. " di inventori habis")
-            return
+            local hasBreakable = false
+            for _, t in ipairs(tiles) do
+                if breakableAt(t.x, t.y) then
+                    hasBreakable = true
+                    break
+                end
+            end
+            if not hasBreakable then
+                stopFarm("Block " .. itemName(farmBlock()) .. " di inventori habis")
+                return
+            end
         end
 
         -- 2) Kalau semua tile sudah penuh, pukul satu tile (gonta-ganti tangan).
         --    Begitu pecah, putaran berikutnya langsung place lagi di tile itu.
-        if not placedAny and State.Running and alive() and not State.DropPause then
+        if (not placedAny or outOfBlock) and State.Running and alive() and not State.DropPause then
             for i = 0, n - 1 do
                 local idx = ((cursor - 1 + i) % n) + 1
                 local t = tiles[idx]
@@ -11028,6 +11327,9 @@ local function startFarm()
     if Build.Running and Build.stop then Build.stop("Dihentikan karena Auto Farm dimulai") end
     if Clear.Running and stopClear then stopClear("Dihentikan karena Auto Farm dimulai") end
     if Harvest.Running and Harvest.stop then Harvest.stop("Dihentikan karena Auto Farm dimulai") end
+    if Session.Factory and Session.Factory.Running and not State.Override and Session.Factory.stop then
+        Session.Factory.stop("Dihentikan karena Auto PnB dimulai")
+    end
     if stopAutoPlant then stopAutoPlant("Dihentikan karena Auto Farm dimulai") end
     table.clear(HitCount)
     table.clear(PlacedAt)
@@ -11079,7 +11381,7 @@ local function autoOn()
     if Move.Homing and Move.HomingLive and not Move.HomingLive() then return false end
     if Harvest.TravelLive and not Harvest.TravelLive() then return false end
     return (Clear.Running or Splice.Roaming or Pabrik.Running or Build.Running or Move.Homing
-        or Vend.Running or Harvest.Running) and alive()
+        or Vend.Running or Harvest.Running or (Session.Factory and Session.Factory.Running)) and alive()
 end
 
 local function setMoveStatus(text)
@@ -11097,6 +11399,8 @@ local function setMoveStatus(text)
         Harvest.Status = text
     elseif Vend.Running then
         Vend.Status = text
+    elseif Session.Factory and Session.Factory.Running then
+        Session.Factory.Status = text
     end
 end
 
@@ -11358,6 +11662,48 @@ local function reachOffsets(R)
     return floor(R), math.ceil(-R + 0.025), floor(R + 0.025)
 end
 
+function Move.floor1BottomY(w)
+    if not w or not w.fg or type(w.h) ~= "number" or type(w.w) ~= "number" then return nil end
+    if Move._f1World == w and Move._f1Name == w.name and Move._f1Fg == w.fg and Move._f1Y ~= nil then
+        return Move._f1Y
+    end
+    local f1y = nil
+    local minWalkable = math.max(6, floor(w.w * 0.08))
+    for y = w.h - 2, 2, -1 do
+        local walkable = 0
+        for x = 0, w.w - 1 do
+            if openAt(x, y) and realSupport(x, y) then
+                walkable += 1
+            end
+        end
+        if walkable >= minWalkable then
+            f1y = y
+            break
+        end
+    end
+    Move._f1World = w
+    Move._f1Name = w.name
+    Move._f1Fg = w.fg
+    Move._f1Y = f1y
+    return f1y
+end
+
+function Move.isForbiddenFloor1Right(w, x, y)
+    if not w or type(x) ~= "number" or type(y) ~= "number" then return false end
+    local f1y = Move.floor1BottomY(w)
+    return f1y ~= nil and y >= f1y and x >= floor(w.w / 2)
+end
+
+function Move.isExplicitDropTarget(tx, ty)
+    if type(tx) ~= "number" or type(ty) ~= "number" then return false end
+    if Session.Factory and Session.Factory.DropX == tx and Session.Factory.DropY == ty then return true end
+    if Harvest and Harvest.DropX == tx and Harvest.DropY == ty then return true end
+    if Pabrik and Pabrik.DropX == tx and Pabrik.DropY == ty then return true end
+    if Vend and Vend.DropX == tx and Vend.DropY == ty then return true end
+    if AutoDrop and AutoDrop.X == tx and AutoDrop.Y == ty then return true end
+    return false
+end
+
 local function astar(sx, sy, goals, gx, gy, R, useBlock, route, timeLimit)
     local w = Refs.World
     if not w then return nil, false, {} end
@@ -11366,6 +11712,14 @@ local function astar(sx, sy, goals, gx, gy, R, useBlock, route, timeLimit)
     local WH = W * H
     local dxm, dyLo, dyHi = reachOffsets(R)
     local oC, sC, bC = {}, {}, {}
+    local f1y = Move.floor1BottomY(w)
+    local midX = floor(W / 2)
+    local function inF1Right(x, y)
+        return f1y ~= nil and y >= f1y and x >= midX
+    end
+    local allowF1Right = (goals and goals.allowFloor1Right == true)
+        or (type(gx) == "number" and type(gy) == "number" and inF1Right(gx, gy) and Move.isExplicitDropTarget(gx, gy))
+    local startInF1Right = inF1Right(sx, sy)
 
     local function open(x, y)
         if x < 0 or x >= W or y >= H then return false end
@@ -11412,6 +11766,7 @@ local function astar(sx, sy, goals, gx, gy, R, useBlock, route, timeLimit)
 
     local function isGoal(nx, ny)
         if route and not route.point(nx, ny) then return false end
+        if not allowF1Right and inF1Right(nx, ny) then return false end
         -- goals.maxY: tempat berdiri tidak boleh lebih bawah dari ini (Bangun Lahan)
         if goals.maxY and ny > goals.maxY then return false end
         for ty = ny + dyLo, ny + dyHi do
@@ -11436,6 +11791,11 @@ local function astar(sx, sy, goals, gx, gy, R, useBlock, route, timeLimit)
     local n, fromX, fromY = 0, sx, sy
     local function add(x, y, kind, cost, build)
         if route and not route.edge(fromX, fromY, x, y, kind) then return end
+        if not allowF1Right and inF1Right(x, y) then
+            -- Dilarang masuk ke Floor 1 bawah kanan. Hanya boleh bergerak keluar jika titik awal memang di sana, dan tidak boleh masuk lagi setelah keluar.
+            if not startInF1Right or not inF1Right(fromX, fromY) then return end
+            cost += 4
+        end
         n += 1
         ex[n], ey[n], ek[n], ec[n], eb[n] = x, y, kind, cost, build
     end
@@ -11694,11 +12054,65 @@ end
 -- ===== ANIMASI AKSI (hanya tampilan di layar sendiri, tidak mengirim apa pun ke server) =====
 -- Tangan karakter mengarah ke tile (sama seperti saat pemain memukul / memasang sendiri).
 function Anim.swing(x, y, kind)
-    if not (Anim.fn and Anim.idx and Anim.set) then return end
+    if not alive() or not State.Visual then return end
+    local ctx = Anim.isCtx(Anim.ctx) and (not Refs.World or rawget(Anim.ctx, "world") == Refs.World) and Anim.ctx or Anim.findCtx()
     local s = playerState()
-    local facing = (s and x + 0.5 < s.x) and -1 or 1
+    local px = (ctx and type(ctx.px) == "number") and ctx.px or (s and s.x)
+    local facing = (px and x + 0.5 < px) and -1 or 1
+    local actKind = kind or "punch"
+
+    if ctx then
+        ctx.action = {
+            kind = actKind,
+            t = os.clock(),
+            x = x + 0.5,
+            y = y + 0.5,
+            facing = facing,
+        }
+        if actKind == "punch" and not State.LiteMode then
+            pcall(function()
+                local items = ctx.Items
+                local worn = ctx.worn
+                local particles = ctx.particles
+                local invUI = ctx.invUI
+                local handId = (worn and worn.hand) or 0
+                local handIt = items and items[handId]
+                local hatIt = items and items[(worn and worn.hat) or 0]
+                local backIt = items and items[(worn and worn.back) or 0]
+                local py = (type(ctx.py) == "number") and (ctx.py - (ctx.H or 0.95) / 2) or (y + 0.5)
+                if handIt and handIt.slashFx and particles and particles.bladeSlash then
+                    local fxStyle = handIt.fxStyle
+                    if fxStyle == "voidRaven" and invUI and invUI.punchForm and invUI.punchForm(worn, handId) == "F1" then
+                        fxStyle = "voidRavenBow"
+                    end
+                    particles:bladeSlash(x + 0.5, y + 0.5, ctx.px, py, fxStyle)
+                end
+                if hatIt and hatIt.slashFx and particles and particles.bladeSlash then
+                    particles:bladeSlash(x + 0.5, y + 0.5, ctx.px, py, hatIt.fxStyle)
+                end
+                if handIt and handIt.fxStyle == "moon" and not State.MutePunch and ctx.Sfx and ctx.Sfx.play then
+                    ctx.Sfx.play("moon_slash", nil, 0.12)
+                end
+                if hatIt and hatIt.punchFx and particles and type(particles[hatIt.punchFx]) == "function" then
+                    pcall(particles[hatIt.punchFx], particles, x + 0.5, y + 0.5, ctx.px, py)
+                end
+                if backIt and backIt.punchFx and particles and type(particles[backIt.punchFx]) == "function" then
+                    pcall(particles[backIt.punchFx], particles, x + 0.5, y + 0.5, ctx.px, py)
+                end
+                if invUI and invUI.holdsRapier and invUI.holdsRapier() and invUI.rapierHit then
+                    invUI.rapierHit(x + 0.5, y + 0.5, ctx.px, ctx.py, facing)
+                end
+                if handIt and handIt.truth and particles and particles.truthLash then
+                    particles:truthLash(ctx.px - facing * 0.22, ctx.py - 0.41, x + 0.5, y + 0.5)
+                end
+            end)
+        end
+        return
+    end
+
+    if not (Anim.fn and Anim.idx and Anim.set) then return end
     local ok, err = pcall(Anim.set, Anim.fn, Anim.idx, {
-        t = os.clock(), x = x + 0.5, y = y + 0.5, facing = facing, kind = kind
+        t = os.clock(), x = x + 0.5, y = y + 0.5, facing = facing, kind = actKind
     })
     if not ok then
         Anim.BindReason = "setupvalue gagal: " .. tostring(err)
@@ -11732,7 +12146,7 @@ end
 function Anim.place(x, y, id)
     local it = ItemDB[id]
     local seed = it and it.kind == "seed"
-    Anim.swing(x, y, "build")
+    Anim.swing(x, y, seed and "plant" or "build")
     if not seed then Anim.puff(x, y) end
 end
 
@@ -13809,10 +14223,18 @@ local function walkTo(tx, ty, maxSec, live, route, allowLongFall, ignoreGlobalBa
                 directAttempted = true
                 local clearCorridor = true
                 local lo, hi = math.min(sx, tx), math.max(sx, tx)
-                for x = lo, hi do
-                    if not openAt(x, ty) or not realSupport(x, ty) then
-                        clearCorridor = false
-                        break
+                local allowF1RightWalk = Move.isExplicitDropTarget(tx, ty)
+                local startInF1RightWalk = Move.isForbiddenFloor1Right(w, sx, sy)
+                if not allowF1RightWalk and Move.isForbiddenFloor1Right(w, tx, ty) then
+                    clearCorridor = false
+                end
+                if clearCorridor then
+                    for x = lo, hi do
+                        if not openAt(x, ty) or not realSupport(x, ty)
+                            or (not allowF1RightWalk and not startInF1RightWalk and Move.isForbiddenFloor1Right(w, x, ty)) then
+                            clearCorridor = false
+                            break
+                        end
                     end
                 end
                 if clearCorridor then
@@ -14880,9 +15302,9 @@ do
         end
     end
 
-    -- Auto Farm wajib menunggu (bukan stop) selama Auto Take Block aktif.
+    -- Auto Farm wajib menunggu (bukan stop) selama Auto Take Block aktif (kecuali State.Override).
     function Supply.autoWait()
-        return Supply.TakeOn == true
+        return not State.Override and Supply.TakeOn == true
     end
     Supply.faceDir = faceDir
     function Supply.logDropSeed(message)
@@ -17301,6 +17723,7 @@ local function hvsFindTreesInHeap(w)
         serverNow = os.time()
     end
 
+    local bestCandidate, bestMode, bestField, bestCount = nil, nil, nil, 0
     for _, candidate in pairs(objects) do
         if type(candidate) == "table" and candidate ~= w then
             local firstKey, firstValue = next(candidate)
@@ -17332,16 +17755,30 @@ local function hvsFindTreesInHeap(w)
                     Hvs.TreeRefCheckAt = 0
                     Hvs.TreeRefCheckWorld = nil
                     if hvsTreeRefsReady(w) then
-                        Hvs.TreeRefSource = "getgc"
-                        return true
+                        local count = Hvs.TreeRefTimestampCount or 0
+                        if count > bestCount then
+                            bestCandidate, bestMode, bestField, bestCount = candidate, mode, field, count
+                        end
+                        if bestCount >= #seedTiles then
+                            break
+                        end
                     end
-                    Refs.Trees, Refs.TreeMode, Refs.TreeP = nil, nil, nil
-                    Hvs.TreeRefCheckAt = 0
-                    Hvs.TreeRefCheckWorld = nil
                 end
             end
         end
     end
+    if bestCandidate then
+        Refs.Trees, Refs.TreeMode, Refs.TreeP = bestCandidate, bestMode, bestField
+        Hvs.TreeRefCheckAt = 0
+        Hvs.TreeRefCheckWorld = nil
+        if hvsTreeRefsReady(w) then
+            Hvs.TreeRefSource = "getgc"
+            return true
+        end
+    end
+    Refs.Trees, Refs.TreeMode, Refs.TreeP = nil, nil, nil
+    Hvs.TreeRefCheckAt = 0
+    Hvs.TreeRefCheckWorld = nil
     return false
 end
 
@@ -17557,6 +17994,20 @@ local function hvsRowMap(w)
     end
     Hvs.RowRank, Hvs.RowRankWorld, Hvs.RowCount = map, w, n
     return map, n
+end
+
+-- Baris panen/tanam paling bawah (Floor 1) tidak boleh dipanen atau ditanami.
+local function hvsBottomRowY(w)
+    if not w then return nil end
+    local map, count = hvsRowMap(w)
+    if count < 2 then return nil end
+    local bottomY = nil
+    for y in pairs(map) do
+        if bottomY == nil or y > bottomY then
+            bottomY = y
+        end
+    end
+    return bottomY
 end
 
 local function hvsOrder()
@@ -18328,6 +18779,8 @@ local function hvsWorkInReach(s, retryTarget)
     local playerRow = floor(s.y - 0.475)
     local y = retryTarget and retryTarget.y or playerRow
     if not s.grounded or playerRow < 0 or playerRow >= w.h then return 0 end
+    local skipBottomY = hvsBottomRowY(w)
+    if skipBottomY ~= nil and y == skipBottomY then return 0 end
     if retryTarget and y ~= playerRow and not hvsVerticalReach(s, retryTarget) then return 0 end
     if y < 0 or y >= w.h then return 0 end
 
@@ -18382,19 +18835,17 @@ local function hvsWorkInReach(s, retryTarget)
             end
         end
     end
-    -- Di baris yang sama, prioritaskan pohon di depan avatar sesuai arah snake.
-    -- Ini mencegah target lokal di belakang memicu gerakan bolak-balik.
+    -- Di baris yang sama, ikuti urutan snake secara ketat agar pohon di pojok
+    -- tidak terlewati saat avatar memanjat dari baris bawah.
     local rowMap, rowCount = hvsRowMap(w)
     local rank = rowMap[y] or (y + 1)
     local rowRank = (Hvs.Order == "Atas ke Bawah") and (rank - 1) or (rowCount - rank)
     local sweepDir = (rowRank % 2 == 0) and 1 or -1
     table.sort(list, function(a, b)
-        local da = (a.x + 0.5 - s.x) * sweepDir
-        local db = (b.x + 0.5 - s.x) * sweepDir
-        local aAhead, bAhead = da >= -0.05, db >= -0.05
-        if aAhead ~= bAhead then return aAhead end
-        if aAhead then return da < db end
-        return abs(da) < abs(db)
+        if a.x ~= b.x then
+            return (a.x * sweepDir) < (b.x * sweepDir)
+        end
+        return false
     end)
 
     -- Hanya satu kandidat yang dicoba dalam satu slot waktu. Kandidat berikutnya
@@ -18456,7 +18907,7 @@ local function hvsWorkInReach(s, retryTarget)
     end
 
     -- Tidak ada aksi terkonfirmasi: jangan pindah ke pohon lain pada slot yang sama.
-    skipTile(Hvs.Skip, t.idx, 0.35)
+    skipTile(Hvs.Skip, t.idx, 0.15)
     if Hvs.PendingTarget and Hvs.PendingTarget.idx == t.idx then
         Hvs.PendingTarget = nil
     end
@@ -18659,9 +19110,16 @@ end
 
 -- Callback gerak hanya menjadwalkan worker; tidak menunggu tryBreak di frame gerakan.
 Hvs.MoveTick = function()
+    if Hvs.RowSweepActive then return end
     if not hvsLive() or Hvs.Dropping or Hvs.RowTransitionActive or hvsDropDue() then return end
     local s = playerState()
     if not s or s.dead then return end
+    if Session.Factory and Session.Factory.Harvesting then
+        local tgt = Hvs.AdaptiveTarget
+        if not tgt or floor(s.y - 0.475) ~= tgt.y then return end
+        local rowDir = hvsRowDirection(tgt.y, Refs.World)
+        if ((tgt.x + 0.5) - s.x) * rowDir < -1.5 then return end
+    end
     hvsAdaptiveSpeed(s)
     if not s.grounded or Hvs.HarvestBusy or Hvs.HarvestWorkerBusy or Hvs.HarvestQueued
         or os.clock() < (Hvs.NextHarvestAt or 0) then return end
@@ -18694,6 +19152,8 @@ local function hvsMissBehind(w, row, trace)
     local previous = trace.x
     trace.x = x
     if not previous or previous == x then return nil end
+    local rowDir = hvsRowDirection(row, w)
+    if (x - previous) * rowDir <= 0 then return nil end
     local step = previous < x and -1 or 1
     local now, serverTime = os.clock(), workspace:GetServerTimeNow()
     for col = x + step, previous, step do
@@ -18768,7 +19228,11 @@ local function hvsScan(excludeState)
     local W, H = w.w, w.h
     local now, st = os.clock(), workspace:GetServerTimeNow()
     local best = nil
+    local bestSkippedOnRow = nil
     local cmp = hvsOrder()
+    local rowMap, rowCount = hvsRowMap(w)
+    local skipBottomY = hvsBottomRowY(w)
+    local factoryStrict = Session.Factory and Session.Factory.Harvesting == true
     local hasExcludeState = excludeState ~= nil
     local excludeY = excludeState and floor(excludeState.y - 0.475) or nil
     local excludeX = excludeState and excludeState.x or nil
@@ -18778,36 +19242,30 @@ local function hvsScan(excludeState)
     local movingAlongRow = hasExcludeState and abs(tonumber(excludeState.vx) or 0) >= 2
     local scanDir = 1
     if excludeState then
-        local rowMap, rowCount = hvsRowMap(w)
         local rank = rowMap[excludeY] or (excludeY + 1)
         local rowRank = (Hvs.Order == "Atas ke Bawah") and (rank - 1) or (rowCount - rank)
         scanDir = (rowRank % 2 == 0) and 1 or -1
     end
     local function beforeCandidate(a, b)
+        if factoryStrict then
+            return cmp(a, b)
+        end
         if excludeState then
             local function priority(t)
-                if t.y == excludeY then
-                    local along = (t.x + 0.5 - excludeX) * scanDir
-                    return along >= -0.05 and 0 or 1
-                end
+                if t.y == excludeY then return 0 end
                 -- Row atas yang bisa dipanen langsung didahulukan daripada
                 -- target jauh yang memaksa avatar berjalan mengitari farm.
-                if hvsVerticalReach(excludeState, t) then return 2 end
-                return 3
+                if hvsVerticalReach(excludeState, t) then return 1 end
+                return 2
             end
             local pa, pb = priority(a), priority(b)
             if pa ~= pb then return pa < pb end
             if pa == 0 then
-                local da = (a.x + 0.5 - excludeX) * scanDir
-                local db = (b.x + 0.5 - excludeX) * scanDir
-                return da < db
+                if a.x ~= b.x then
+                    return (a.x * scanDir) < (b.x * scanDir)
+                end
+                return false
             elseif pa == 1 then
-                -- Setelah target di depan habis, selesaikan sisa di belakang
-                -- dari tile terdekat ke terjauh sebelum pindah baris.
-                local da = abs((a.x + 0.5 - excludeX) * scanDir)
-                local db = abs((b.x + 0.5 - excludeX) * scanDir)
-                return da < db
-            elseif pa == 2 then
                 local da = abs(a.x + 0.5 - excludeX) + abs(a.y - excludeY) * 1.5
                 local db = abs(b.x + 0.5 - excludeX) + abs(b.y - excludeY) * 1.5
                 return da < db
@@ -18816,7 +19274,7 @@ local function hvsScan(excludeState)
         return cmp(a, b)
     end
     for y = 0, H - 1 do
-        local row = w.fg[y]
+        local row = (skipBottomY == nil or y ~= skipBottomY) and w.fg[y] or nil
         if row then
             for x = 0, W - 1 do
                 local id = row[x] or 0
@@ -18836,10 +19294,25 @@ local function hvsScan(excludeState)
                                 end
                             end
                         end
+                    elseif excludeState and y == excludeY then
+                        local skipUntil = Hvs.Skip[idx]
+                        if skipUntil and (skipUntil - now) <= 3.0 then
+                            local ra = treeReadyAt(x, y, id)
+                            if ra and st >= ra and canWorkAt(x, y) then
+                                local t = { x = x, y = y, idx = idx, id = id, world = w }
+                                if not bestSkippedOnRow or beforeCandidate(t, bestSkippedOnRow) then
+                                    bestSkippedOnRow = t
+                                end
+                            end
+                        end
                     end
                 end
             end
         end
+    end
+    if excludeState and bestSkippedOnRow and (not best or best.y ~= excludeY) then
+        Hvs.Skip[bestSkippedOnRow.idx] = nil
+        best = bestSkippedOnRow
     end
     Hvs.AdaptiveTarget = best
     return best
@@ -18886,6 +19359,201 @@ local function hvsSweepRow(s, preferred)
     Hvs.TravelLive = nil
     Hvs.ScanAt = 0
     return ok, missedTarget
+end
+
+-- Sapu baris datar secara kontinu dengan jarak berhenti ketat 1 tile di belakang
+-- target (atau sisi berlawanan untuk pohon pojok), lalu langsung panen sesuai timing.
+function Hvs.walkRowHarvest(w, initialTarget)
+    if not w or w ~= Refs.World or not initialTarget or not hvsLive() then return false end
+    local y = tonumber(initialTarget.y)
+    if not y or y < 0 or y >= w.h then return false end
+    local skipBottomY = hvsBottomRowY(w)
+    if skipBottomY ~= nil and y == skipBottomY then return false end
+    local s0 = playerState()
+    if not s0 or s0.dead or not s0.grounded or floor(s0.y - 0.475) ~= y then return false end
+
+    local dir = hvsRowDirection(y, w)
+    local failCount = {}
+
+    local function findNextOnRow(curX)
+        local row = w.fg[y]
+        if not row then return nil end
+        local pending = Hvs.PendingTarget
+        if pending and pending.world == w and pending.y == y then
+            local pId = fgIdAt(pending.x, y)
+            if pId ~= 0 and (not pending.id or pId == pending.id) and canWorkAt(pending.x, y) then
+                return pending
+            end
+        end
+        local now, st = os.clock(), workspace:GetServerTimeNow()
+        local xStart = (dir > 0) and 0 or (w.w - 1)
+        local xEnd = (dir > 0) and (w.w - 1) or 0
+        for x = xStart, xEnd, dir do
+            local id = row[x] or 0
+            if id ~= 0 then
+                local idx = y * w.w + x
+                local skipUntil = Hvs.Skip[idx]
+                local blockedSkip = false
+                if skipUntil and skipUntil > now then
+                    if (skipUntil - now) > 3.0 or (failCount[idx] or 0) >= 6 then
+                        blockedSkip = true
+                    elseif not curX or ((x + 0.5 - curX) * dir > 1.6) or os.clock() >= (Hvs.NextHarvestAt or 0) then
+                        Hvs.Skip[idx] = nil
+                    end
+                end
+                if not blockedSkip then
+                    local ra = treeReadyAt(x, y, id)
+                    if ra and st >= ra then
+                        if canWorkAt(x, y) then
+                            return { x = x, y = y, idx = idx, id = id, world = w }
+                        else
+                            skipTile(Hvs.Skip, idx, 120)
+                        end
+                    end
+                end
+            end
+        end
+        return nil
+    end
+
+    local function pickStandX(tx, curX)
+        local isBehind = curX ~= nil and ((tx + 0.5 - curX) * dir < -0.1)
+        local order = isBehind and { tx + dir, tx - dir } or { tx - dir, tx + dir }
+        for _, sx in ipairs(order) do
+            if sx >= 0 and sx < w.w and openAt(sx, y) and realSupport(sx, y)
+                and not Move.isForbiddenFloor1Right(w, sx, y) then
+                return sx
+            end
+        end
+        return nil
+    end
+
+    local function corridorOk(fromX, toX)
+        local lo, hi = math.min(fromX, toX), math.max(fromX, toX)
+        for x = lo, hi do
+            if not openAt(x, y) or not realSupport(x, y)
+                or Move.isForbiddenFloor1Right(w, x, y) then
+                return false
+            end
+        end
+        return true
+    end
+
+    local initStandX = pickStandX(initialTarget.x, s0.x)
+    if not initStandX or not corridorOk(floor(s0.x), initStandX) then
+        return false
+    end
+
+    Hvs.RowSweepActive = true
+    local startHarvested = Hvs.Harvested or 0
+    local didAny = false
+    local lastProgressAt = os.clock()
+    local lastTargetX = nil
+    local lastHarvestCount = startHarvested
+    local settleUntil = nil
+    local bestGoalDist = nil
+
+    local okLoop, loopErr = pcall(function()
+        while frame() do
+            if not hvsLive() or Refs.World ~= w or hvsDropDue() then break end
+            local s = playerState()
+            if not s or s.dead or not s.grounded or floor(s.y - 0.475) ~= y then break end
+
+            AutoInput.speed = math.clamp(tonumber(Misc.Speed) or 100, 50, 500)
+
+            local front = findNextOnRow(s.x)
+            if not front then
+                AutoInput.left, AutoInput.right = false, false
+                lastProgressAt = os.clock()
+                bestGoalDist = nil
+                if Hvs.HarvestBusy or Hvs.HarvestWorkerBusy or Hvs.HarvestQueued then
+                    settleUntil = nil
+                    Hvs.Status = ("Menyelesaikan panen terakhir di baris %d..."):format(y)
+                else
+                    if not settleUntil then
+                        settleUntil = os.clock() + 0.45
+                        Hvs.Status = ("Verifikasi baris %d sebelum pindah floor..."):format(y)
+                    end
+                    if os.clock() >= settleUntil then
+                        Hvs.FloorVerifiedY = y
+                        didAny = true
+                        break
+                    end
+                end
+            else
+                settleUntil = nil
+                Hvs.FloorVerifiedY = nil
+
+                local standX = pickStandX(front.x, s.x)
+                if not standX or not corridorOk(floor(s.x), standX) then
+                    break
+                end
+
+                Hvs.AdaptiveTarget = front
+                local curHarvested = Hvs.Harvested or 0
+                if curHarvested > startHarvested then
+                    didAny = true
+                end
+
+                local goalCx = standX + 0.5
+                local distToGoal = abs(goalCx - s.x)
+                if front.x ~= lastTargetX or curHarvested ~= lastHarvestCount then
+                    lastTargetX = front.x
+                    lastHarvestCount = curHarvested
+                    lastProgressAt = os.clock()
+                    bestGoalDist = distToGoal
+                elseif bestGoalDist == nil or distToGoal < bestGoalDist - 0.35 then
+                    bestGoalDist = distToGoal
+                    lastProgressAt = os.clock()
+                elseif os.clock() - lastProgressAt > 3.5 then
+                    break
+                end
+
+                steerX(s, goalCx, 0.12)
+
+                if hvsAtSpacing(s, front.x, y)
+                    and not Hvs.HarvestBusy and not Hvs.HarvestWorkerBusy and not Hvs.HarvestQueued
+                    and os.clock() >= (Hvs.NextHarvestAt or 0) then
+                    Hvs.HarvestQueued = true
+                    local hitTarget = front
+                    task.spawn(function()
+                        Hvs.HarvestQueued = false
+                        if not hvsLive() or Refs.World ~= w or hvsDropDue() or Hvs.HarvestWorkerBusy then return end
+                        local cur = playerState()
+                        if cur and not cur.dead and cur.grounded and hvsAtSpacing(cur, hitTarget.x, y) then
+                            local beforeCount = Hvs.Harvested or 0
+                            hvsRunWork(cur, hitTarget)
+                            if fgIdAt(hitTarget.x, y) == 0 then
+                                failCount[hitTarget.idx] = nil
+                            elseif (Hvs.Harvested or 0) == beforeCount
+                                and not (Hvs.PendingTarget and Hvs.PendingTarget.idx == hitTarget.idx) then
+                                failCount[hitTarget.idx] = (failCount[hitTarget.idx] or 0) + 1
+                                if failCount[hitTarget.idx] >= 6 then
+                                    skipTile(Hvs.Skip, hitTarget.idx, 10)
+                                end
+                            end
+                        end
+                    end)
+                    didAny = true
+                elseif not Hvs.HarvestBusy then
+                    if ((front.x + 0.5 - s.x) * dir) < -0.1 then
+                        Hvs.Status = ("Balik panen pohon terlewat (%d,%d)"):format(front.x, y)
+                    else
+                        Hvs.Status = ("Menyusuri baris (%d,%d)"):format(front.x, y)
+                    end
+                end
+            end
+        end
+    end)
+
+    Hvs.RowSweepActive = false
+    AutoInput.speed = nil
+    releaseInput()
+    if not okLoop and os.clock() - (Hvs.LastWorkerErrorAt or -10) >= 10 then
+        Hvs.LastWorkerErrorAt = os.clock()
+        warn("[ByteHub] Auto Harvest row sweep: " .. tostring(loopErr))
+    end
+    return didAny
 end
 
 local function hvsLoop(runId)
@@ -19092,7 +19760,7 @@ local function hvsLoop(runId)
             -- prioritaskan mencari target di luar jangkauan gerak agar avatar
             -- berjalan dan MoveTick memanen pohon yang dilewati.
             local harvested, failed = 0, nil
-            if (Hvs.Harvested or 0) == 0 then
+            if (Hvs.Harvested or 0) == 0 and not (Session.Factory and Session.Factory.Harvesting) then
                 harvested, failed = hvsRunWork(s)
             end
             if failed then
@@ -19103,13 +19771,13 @@ local function hvsLoop(runId)
                 Hvs.Guard = 0
                 Hvs.ScanAt = 0
             else
-                -- Scan seluruh world itu berat (6000 tile): paling sering 4x/detik.
+                -- Scan cepat (real-time) agar pohon yang baru matang atau terlewat langsung terdeteksi.
                 local now = os.clock()
                 if now < (Hvs.ScanAt or 0) then
                     task.wait(0.05)
                     continue
                 end
-                Hvs.ScanAt = now + 0.25
+                Hvs.ScanAt = now + 0.05
                 local moveFirst = (Hvs.Harvested or 0) > 0 or Hvs.PendingTarget ~= nil
                 local pending = Hvs.PendingTarget
                 if pending then
@@ -19261,6 +19929,28 @@ local function hvsLoop(runId)
                 if hvsDropDue() then continue end
                 if target then
                     Hvs.Guard += 1
+                    local curRowY = floor(s.y - 0.475)
+                    if s.grounded and target.y == curRowY then
+                        Hvs.FloorVerifiedY = nil
+                    elseif s.grounded and target.y ~= curRowY
+                        and Hvs.FloorVerifiedY ~= curRowY
+                        and curRowY ~= hvsBottomRowY(w) then
+                        releaseInput()
+                        Hvs.Status = ("Memastikan floor %d bersih sebelum pindah..."):format(curRowY)
+                        local waitBusy = os.clock() + 1.0
+                        while hvsLive() and Refs.World == w and not hvsDropDue()
+                            and (Hvs.HarvestBusy or Hvs.HarvestWorkerBusy or Hvs.HarvestQueued)
+                            and os.clock() < waitBusy do
+                            task.wait(0.05)
+                        end
+                        local settleEnd = os.clock() + 0.45
+                        while hvsLive() and Refs.World == w and not hvsDropDue() and os.clock() < settleEnd do
+                            task.wait(0.05)
+                        end
+                        Hvs.FloorVerifiedY = curRowY
+                        Hvs.ScanAt = 0
+                        continue
+                    end
                     -- Panen dulu pohon row atas jika masih masuk jangkauan dan
                     -- tidak tertutup block. Setelah berhasil, loop akan naik ke
                     -- tile yang baru dikosongkan lalu spacing normal dilanjutkan.
@@ -19274,6 +19964,14 @@ local function hvsLoop(runId)
                         end
                         task.wait(0.03)
                         continue
+                    end
+                    if s.grounded and floor(s.y - 0.475) == target.y then
+                        local swept = Hvs.walkRowHarvest(w, target)
+                        if swept then
+                            Hvs.Guard = 0
+                            Hvs.ScanAt = 0
+                            continue
+                        end
                     end
                     Hvs.Status = ("Mengatur spacing ke pohon (%d,%d)"):format(target.x, target.y)
                     local trace = {}
@@ -19291,14 +19989,24 @@ local function hvsLoop(runId)
                     local afterState = playerState()
                     if reachedSpacing and afterState
                         and hvsAtSpacing(afterState, target.x, target.y) then
-                        -- walkTo dapat selesai karena avatar sudah berada tepat di
-                        -- tile spacing. Dalam kasus itu tidak ada frame gerak untuk
-                        -- memicu MoveTick, jadi jalankan satu harvest secara langsung.
-                        local directHarvested, directFailed = hvsRunWork(afterState, target)
-                        if directFailed then missed = directFailed end
-                        if directHarvested > 0 then
-                            Hvs.Guard = 0
-                            Hvs.ScanAt = 0
+                        if fgIdAt(target.x, target.y) ~= 0 and (Hvs.NextHarvestAt or 0) > os.clock() then
+                            local waitLeft = (Hvs.NextHarvestAt or 0) - os.clock()
+                            if waitLeft > 0 then
+                                task.wait(math.min(waitLeft, 0.5))
+                                afterState = playerState()
+                            end
+                        end
+                        if hvsLive() and Refs.World == w and not hvsDropDue()
+                            and afterState and hvsAtSpacing(afterState, target.x, target.y) then
+                            -- walkTo dapat selesai karena avatar sudah berada tepat di
+                            -- tile spacing. Dalam kasus itu tidak ada frame gerak untuk
+                            -- memicu MoveTick, jadi jalankan satu harvest secara langsung.
+                            local directHarvested, directFailed = hvsRunWork(afterState, target)
+                            if directFailed then missed = directFailed end
+                            if directHarvested > 0 then
+                                Hvs.Guard = 0
+                                Hvs.ScanAt = 0
+                            end
                         end
                     end
                     if not reachedSpacing or not (afterState and hvsAtSpacing(afterState, target.x, target.y)) then
@@ -19339,11 +20047,16 @@ function Hvs.start()
     if Pabrik.Running then Pabrik.stop("Dihentikan karena Auto Harvest dimulai") end
     if Build.Running then Build.stop("Dihentikan karena Auto Harvest dimulai") end
     if Vend.Running and Vend.stop then Vend.stop("Dihentikan karena Auto Harvest dimulai") end
+    if Session.Factory and Session.Factory.Running and not Session.Factory.Harvesting and Session.Factory.stop then
+        Session.Factory.stop("Dihentikan karena Auto Harvest dimulai")
+    end
     if stopAutoPlant then stopAutoPlant("Dihentikan karena Auto Harvest dimulai") end
     Hvs.Harvested, Hvs.Collected, Hvs.Dropped, Hvs.SeedDropped = 0, 0, 0, 0
     Hvs.CollectBase = State.Collected
     Hvs.NextHarvestAt, Hvs.PendingTarget = 0, nil
     Hvs.RowTransitionTarget, Hvs.RowTransitionActive = nil, false
+    Hvs.RowSweepActive = false
+    Hvs.FloorVerifiedY = nil
     Hvs.PathStatus = nil
     Hvs.HarvestBusy, Hvs.HarvestLock, Hvs.AdaptiveTarget = false, nil, nil
     Hvs.HarvestQueued = false
@@ -19385,6 +20098,8 @@ function Hvs.stop(reason)
     Hvs.On = false
     Hvs.TravelLive = nil
     Hvs.RowTransitionTarget, Hvs.RowTransitionActive = nil, false
+    Hvs.RowSweepActive = false
+    Hvs.FloorVerifiedY = nil
     Hvs.Guard = 0
     Hvs.ScanAt = 0
     Hvs.Dropping = false
@@ -19414,10 +20129,11 @@ end
 function Hvs.readyCount()
     local w = Refs.World
     if not w then return 0, 0 end
+    local skipBottomY = hvsBottomRowY(w)
     local st = workspace:GetServerTimeNow()
     local ready, total = 0, 0
     for y = 0, w.h - 1 do
-        local row = w.fg[y]
+        local row = (skipBottomY == nil or y ~= skipBottomY) and w.fg[y] or nil
         if row then
             for x = 0, w.w - 1 do
                 local id = row[x] or 0
@@ -19442,6 +20158,1898 @@ Harvest.stop = Hvs.stop
 Harvest.readyCount = Hvs.readyCount
 executorEnv.__harvestStop = Hvs.stop -- dipakai Auto Plant (di luar mount) untuk eksklusif
 
+--// --- FACTORY (siklus Harvest bawah -> PnB jarak aman -> Auto Drop Seed -> Auto Plant) ---
+do (function() -- fungsi sendiri: variabel di dalam tidak ikut batas 200 local
+    local F = Session.Factory
+    local DEFAULT_ROT_LOADER_URL = "https://raw.githubusercontent.com/brbrpatapimm/plerr/main/NewUI_Second_95.lua"
+    local ROT_FOLDER = "ByteHub"
+    local ROT_FILE = ROT_FOLDER .. "/factory_rotation_" .. tostring(LocalPlayer and LocalPlayer.UserId or 0) .. ".json"
+    local ROT_TELEPORT_KEY = "ByteHub.FactoryRotation.v1"
+
+    local function normalizeRotationWorld(name)
+        return tostring(name or ""):upper():gsub("[^A-Z0-9]", "")
+    end
+
+    local function parseRotationWorlds(raw)
+        local text = tostring(raw or "")
+        local out, seen = {}, {}
+        for token in text:gmatch("[^,%s;]+") do
+            local clean = normalizeRotationWorld(token)
+            if clean ~= "" and not seen[clean] then
+                seen[clean] = true
+                out[#out + 1] = clean
+            end
+        end
+        return out
+    end
+
+    local function nextRotationWorld(currentWorld)
+        local worlds = parseRotationWorlds(F.RotationWorldsText)
+        if #worlds == 0 then return nil, 0 end
+        local cur = normalizeRotationWorld(currentWorld)
+        if #worlds == 1 then
+            if worlds[1] ~= cur then return worlds[1], 1 end
+            return nil, 1
+        end
+        for i, wn in ipairs(worlds) do
+            if wn == cur then
+                local nextIdx = (i % #worlds) + 1
+                return worlds[nextIdx], nextIdx
+            end
+        end
+        local idx = ((math.max(1, math.floor(tonumber(F.RotationIndex) or 1)) - 1) % #worlds) + 1
+        if worlds[idx] == cur then
+            idx = (idx % #worlds) + 1
+        end
+        return worlds[idx], idx
+    end
+
+    local function ensureRotFolder()
+        if type(isfolder) == "function" and type(makefolder) == "function" then
+            local ok, exists = pcall(isfolder, ROT_FOLDER)
+            if ok and not exists then pcall(makefolder, ROT_FOLDER) end
+        end
+    end
+
+    local function saveRotationPending(targetWorld, nextIdx)
+        local target = normalizeRotationWorld(targetWorld)
+        if target == "" then return false end
+        local payload = {
+            Schema = 1,
+            UserId = LocalPlayer and LocalPlayer.UserId or 0,
+            PlaceId = game.PlaceId,
+            TargetWorld = target,
+            RotationIndex = math.max(1, math.floor(tonumber(nextIdx) or 1)),
+            RotationWorldsText = tostring(F.RotationWorldsText or ""),
+            RotationOn = true,
+            RotationDelaySec = math.clamp(math.floor(tonumber(F.RotationDelaySec) or 3), 1, 15),
+            DropX = tonumber(F.DropX) or -1,
+            DropY = tonumber(F.DropY) or -1,
+            DropFacing = (tonumber(F.DropFacing) or 1) < 0 and -1 or 1,
+            DropGuardSec = tonumber(F.DropGuardSec) or 2.5,
+            SafeDist = tonumber(F.SafeDist) or 3,
+            BlockLimit = tonumber(F.BlockLimit) or 200,
+            SeedDropAt = tonumber(F.SeedDropAt) or 200,
+            CreatedAt = os.time(),
+        }
+        local fileSaved = false
+        if type(writefile) == "function" then
+            ensureRotFolder()
+            local okEnc, encoded = pcall(HttpService.JSONEncode, HttpService, payload)
+            if okEnc and type(encoded) == "string" then
+                fileSaved = pcall(writefile, ROT_FILE, encoded)
+            end
+        end
+        local teleSaved = pcall(function()
+            TeleportService:SetTeleportSetting(ROT_TELEPORT_KEY, payload)
+        end)
+        return fileSaved or teleSaved
+    end
+
+    local function clearRotationPending()
+        if type(isfile) == "function" and type(delfile) == "function" then
+            local okEx, exists = pcall(isfile, ROT_FILE)
+            if okEx and exists then pcall(delfile, ROT_FILE) end
+        end
+        pcall(function()
+            TeleportService:SetTeleportSetting(ROT_TELEPORT_KEY, false)
+        end)
+    end
+
+    local function readRotationPending()
+        local payload
+        if type(isfile) == "function" and type(readfile) == "function" then
+            local okEx, exists = pcall(isfile, ROT_FILE)
+            if okEx and exists then
+                local okRd, raw = pcall(readfile, ROT_FILE)
+                if okRd and type(raw) == "string" then
+                    local okDec, dec = pcall(HttpService.JSONDecode, HttpService, raw)
+                    if okDec and type(dec) == "table" then payload = dec end
+                end
+            end
+        end
+        if not payload then
+            local okT, data = pcall(function()
+                return TeleportService:GetTeleportSetting(ROT_TELEPORT_KEY)
+            end)
+            if okT and type(data) == "table" then payload = data end
+        end
+        local uid = LocalPlayer and LocalPlayer.UserId or 0
+        if type(payload) ~= "table"
+            or payload.Schema ~= 1
+            or tonumber(payload.UserId) ~= uid
+            or (payload.PlaceId ~= nil and tonumber(payload.PlaceId) ~= game.PlaceId)
+            or normalizeRotationWorld(payload.TargetWorld) == ""
+            or os.time() - (tonumber(payload.CreatedAt) or 0) < 0
+            or os.time() - (tonumber(payload.CreatedAt) or 0) > 900 then
+            return nil
+        end
+        return payload
+    end
+
+    local function queueFactoryLoader()
+        local ar = executorEnv.__ByteHubAutoReconnect
+        if type(ar) == "table" and type(ar.queueLoader) == "function" then
+            local ok, res, detail = pcall(ar.queueLoader)
+            if ok and res == true then return true end
+        end
+        local url = DEFAULT_ROT_LOADER_URL
+        local arFile = ROT_FOLDER .. "/autoreconnect_" ..
+            tostring(LocalPlayer and LocalPlayer.UserId or 0) .. "_" .. tostring(game.PlaceId) .. ".json"
+        if type(isfile) == "function" and type(readfile) == "function" then
+            local okEx, exists = pcall(isfile, arFile)
+            if okEx and exists then
+                local okRd, raw = pcall(readfile, arFile)
+                if okRd and type(raw) == "string" then
+                    local okDec, dec = pcall(HttpService.JSONDecode, HttpService, raw)
+                    if okDec and type(dec) == "table" and type(dec.Settings) == "table"
+                        and type(dec.Settings.LoaderUrl) == "string" and dec.Settings.LoaderUrl ~= "" then
+                        url = dec.Settings.LoaderUrl
+                    end
+                end
+            end
+        end
+        local queueFn = executorEnv.queue_on_teleport
+            or executorEnv.queueonteleport
+            or (executorEnv.syn and executorEnv.syn.queue_on_teleport)
+            or (executorEnv.fluxus and executorEnv.fluxus.queue_on_teleport)
+        if type(queueFn) ~= "function" then
+            return false, "Executor tidak menyediakan queue_on_teleport"
+        end
+        local queuedSource = ([=[
+            if not game:IsLoaded() then game.Loaded:Wait() end
+            local loaderUrl = %q
+            local source
+            local lastError = "respons kosong"
+            local function validLua(text)
+                if type(text) ~= "string" or text:match("^%%s*$") then return false, "respons kosong" end
+                if text:sub(1, 3) == "\239\187\191" then text = text:sub(4) end
+                if text:match("^%%s*<") then return false, "Server mengirim HTML" end
+                if text:match("^%%s*[45]%%d%%d[:%%s]") then return false, text:sub(1, 120) end
+                return true, text
+            end
+            local function tryLocal(path)
+                if type(path) ~= "string" or path == "" then return nil end
+                if type(isfile) == "function" and type(readfile) == "function" then
+                    local okEx, exists = pcall(isfile, path)
+                    if okEx and exists then
+                        local okRd, content = pcall(readfile, path)
+                        if okRd then
+                            local v, val = validLua(content)
+                            if v then return val end
+                            lastError = val
+                        end
+                    end
+                end
+                return nil
+            end
+            if loaderUrl:match("^local:") then
+                source = tryLocal(loaderUrl:sub(7))
+            elseif loaderUrl:match("%%.luau?$") and not loaderUrl:match("^https?://") then
+                source = tryLocal(loaderUrl)
+            end
+            if not source and loaderUrl:match("^https://") then
+                local ok, res = pcall(function() return game:HttpGet(loaderUrl) end)
+                if ok then
+                    local v, val = validLua(res)
+                    if v then source = val else lastError = val end
+                else
+                    lastError = tostring(res)
+                end
+                if not source then
+                    local env = (type(getgenv) == "function" and getgenv()) or _G
+                    local req = env.request or env.http_request or (env.syn and env.syn.request) or (env.http and env.http.request)
+                    if type(req) == "function" then
+                        local okR, resp = pcall(req, { Url = loaderUrl, Method = "GET" })
+                        local status = okR and type(resp) == "table" and tonumber(resp.StatusCode or resp.Status)
+                        local body = okR and type(resp) == "table" and (resp.Body or resp.body)
+                        if not status or (status >= 200 and status < 300) then
+                            local v, val = validLua(body)
+                            if v then source = val else lastError = val end
+                        else
+                            lastError = "HTTP " .. tostring(status)
+                        end
+                    end
+                end
+            end
+            if not source then
+                for _, localPath in ipairs({ "ByteHub/local_loader.lua", "NewUI_Second_95.lua" }) do
+                    source = tryLocal(localPath)
+                    if source then break end
+                end
+            end
+            assert(type(source) == "string" and source ~= "", "[ByteHub] Gagal mengunduh loader Rotation: " .. tostring(lastError))
+            local fn, compErr = loadstring(source, "ByteHub_Loader")
+            assert(type(fn) == "function", "[ByteHub] Compile loader gagal: " .. tostring(compErr))
+            fn()
+        ]=]):format(url)
+        local okQ, qRes = pcall(queueFn, queuedSource)
+        return okQ and qRes ~= false, qRes
+    end
+
+    local function parseFactoryOffsets()
+        local list = {}
+        for key in pairs(State.Offsets or {}) do
+            local dx, dy = string.match(key, "^(-?%d+),(-?%d+)$")
+            if dx and dy then
+                list[#list + 1] = { dx = tonumber(dx), dy = tonumber(dy) }
+            end
+        end
+        table.sort(list, function(a, b)
+            if a.dy ~= b.dy then return a.dy < b.dy end
+            return a.dx < b.dx
+        end)
+        return list
+    end
+
+    local function factoryLive(runId)
+        return alive() and F.Running and F.On and F.RunId == runId
+    end
+
+    local function dropPointValid()
+        local x, y = tonumber(F.DropX) or -1, tonumber(F.DropY) or -1
+        if x < 0 or y < 0 then
+            return false, "Titik drop belum diatur di tab Factory"
+        end
+        local w = Refs.World
+        if not w then return false, "Data world belum ketemu" end
+        local wn = Guard.worldName()
+        if F.RotationOn ~= true and F.DropWorld and F.DropWorld ~= "" and wn ~= F.DropWorld then
+            return false, "World titik drop (" .. tostring(F.DropWorld) .. ") berbeda"
+        end
+        if x >= w.w or y >= w.h or not openAt(x, y) or not realSupport(x, y) then
+            return false, "Tile titik drop terhalang atau tanpa pijakan"
+        end
+        return true, x, y
+    end
+
+    local function treeCoverageOk(w)
+        if not hvsTreeRefsReady(w) then return false end
+        local totalSeeds = Hvs.TreeRefSeedCount or 0
+        if totalSeeds == 0 then return true end
+        local stamped = Hvs.TreeRefTimestampCount or 0
+        return stamped >= math.max(1, math.floor(totalSeeds * 0.5))
+    end
+
+    local function ensureFactoryTreeRefs(w)
+        if not w then return false end
+        Hvs.TreeRefCheckAt = 0
+        Hvs.TreeRefCheckWorld = nil
+        if treeCoverageOk(w) then return true end
+
+        pcall(findTreeRefs)
+        Hvs.TreeRefCheckAt = 0
+        Hvs.TreeRefCheckWorld = nil
+        if treeCoverageOk(w) then return true end
+
+        Refs.Trees, Refs.TreeMode, Refs.TreeP = nil, nil, nil
+        if Auto.findTreesDeep then pcall(Auto.findTreesDeep) end
+        Hvs.TreeRefCheckAt = 0
+        Hvs.TreeRefCheckWorld = nil
+        if treeCoverageOk(w) then return true end
+
+        hvsHeapScanWorld = nil
+        hvsHeapScanAt = 0
+        pcall(hvsFindTreesInHeap, w)
+        Hvs.TreeRefCheckAt = 0
+        Hvs.TreeRefCheckWorld = nil
+        return treeCoverageOk(w)
+    end
+
+    local function scanWorldTrees(w)
+        local trees, readyCount, totalTrees = {}, 0, 0
+        if not w then return trees, 0, 0 end
+        local skipBottomY = hvsBottomRowY(w)
+        local now = workspace:GetServerTimeNow()
+        local countsByBlock, readyByBlock, seedByBlock = {}, {}, {}
+        for y = 0, w.h - 1 do
+            local row = (skipBottomY == nil or y ~= skipBottomY) and w.fg[y] or nil
+            if row then
+                for x = 0, w.w - 1 do
+                    local id = row[x] or 0
+                    if id ~= 0 then
+                        local it = ItemDB[id]
+                        if it and it.kind == "seed" then
+                            totalTrees += 1
+                            local bId = blockOfSeed(id)
+                            local ra = treeReadyAt(x, y, id)
+                            local ready = ra ~= nil and now >= ra
+                            if ready then readyCount += 1 end
+                            if bId then
+                                F.TrackedBlocks[bId] = true
+                                seedByBlock[bId] = id
+                                countsByBlock[bId] = (countsByBlock[bId] or 0) + 1
+                                if ready then
+                                    readyByBlock[bId] = (readyByBlock[bId] or 0) + 1
+                                end
+                            end
+                            trees[#trees + 1] = {
+                                x = x, y = y, seedId = id, blockId = bId, ready = ready,
+                            }
+                        end
+                    end
+                end
+            end
+        end
+        for _, bId in ipairs(Hvs.TypeIds or {}) do
+            if bId then
+                F.TrackedBlocks[bId] = true
+                if not seedByBlock[bId] then
+                    seedByBlock[bId] = seedOfBlock(bId)
+                end
+            end
+        end
+        if not F.BlockId then
+            local bestBlock, bestReady, bestTotal = nil, -1, -1
+            for bId, cnt in pairs(countsByBlock) do
+                local rc = readyByBlock[bId] or 0
+                if rc > bestReady or (rc == bestReady and cnt > bestTotal) then
+                    bestBlock, bestReady, bestTotal = bId, rc, cnt
+                end
+            end
+            if not bestBlock then
+                for _, bId in ipairs(Hvs.TypeIds or {}) do
+                    if bId then bestBlock = bId break end
+                end
+            end
+            if bestBlock then
+                F.BlockId = bestBlock
+                F.SeedId = seedByBlock[bestBlock] or seedOfBlock(bestBlock)
+            end
+        elseif not F.SeedId then
+            F.SeedId = seedByBlock[F.BlockId] or seedOfBlock(F.BlockId)
+        end
+        return trees, readyCount, totalTrees
+    end
+
+    local function pickBlockForPnB(minCount)
+        minCount = math.max(1, tonumber(minCount) or 1)
+        for _, bId in ipairs(Hvs.TypeIds or {}) do
+            if bId then F.TrackedBlocks[bId] = true end
+        end
+        local bestBlock, bestCount = nil, 0
+        local function consider(bId)
+            if not bId then return end
+            local c = invCount(bId)
+            if c >= minCount then
+                if c > bestCount or (c == bestCount and bId == F.BlockId) then
+                    bestBlock, bestCount = bId, c
+                end
+            end
+        end
+        if F.BlockId then consider(F.BlockId) end
+        for bId in pairs(F.TrackedBlocks) do
+            consider(bId)
+        end
+        if bestBlock then
+            return bestBlock, bestCount, seedOfBlock(bestBlock)
+        end
+        return nil, 0, nil
+    end
+
+    local function pickFullSeed()
+        local lim = math.max(1, tonumber(F.SeedDropAt) or 200)
+        local seen = {}
+        local function checkSeed(sId)
+            if not sId or seen[sId] then return nil end
+            seen[sId] = true
+            local c = invCount(sId)
+            if c >= lim then return sId, c end
+            return nil
+        end
+        if F.SeedId then
+            local sId, c = checkSeed(F.SeedId)
+            if sId then return sId, c end
+        end
+        if F.BlockId then
+            local sId, c = checkSeed(seedOfBlock(F.BlockId))
+            if sId then return sId, c end
+        end
+        for bId in pairs(F.TrackedBlocks) do
+            local sId, c = checkSeed(seedOfBlock(bId))
+            if sId then return sId, c end
+        end
+        for _, bId in ipairs(Hvs.TypeIds or {}) do
+            local sId, c = checkSeed(seedOfBlock(bId))
+            if sId then return sId, c end
+        end
+        return nil, 0
+    end
+
+    local function worldDropSeedCount(seedId)
+        pcall(findDropRefs, false)
+        local list = Drops.list
+        if type(list) ~= "table" then return 0 end
+        local wanted = tonumber(seedId) or seedId
+        local total = 0
+        for _, d in pairs(list) do
+            if type(d) == "table" and (tonumber(d.id) or d.id) == wanted and (d.n or 0) > 0 then
+                total += tonumber(d.n) or 0
+            end
+        end
+        return total
+    end
+
+    local function hasPlantableSpot(w, seedId)
+        if not w or not seedId then return false end
+        local skipBottomY = hvsBottomRowY(w)
+        for y = 0, w.h - 2 do
+            if skipBottomY == nil or y ~= skipBottomY then
+                for x = 0, w.w - 1 do
+                    if plantSpotOk(x, y, seedId) then return true end
+                end
+            end
+        end
+        return false
+    end
+
+    local function findSafePnBSpot(w, sx, sy, safeDist, sameRowOnly)
+        if not w then return nil, nil, "World belum tersedia" end
+        local offs = parseFactoryOffsets()
+        if #offs == 0 then
+            return nil, nil, "Pilih tile dulu di Grid Tile tab Auto PnB"
+        end
+        local treesByRow, treeAt = {}, {}
+        for y = 0, w.h - 1 do
+            local row = w.fg[y]
+            if row then
+                for x = 0, w.w - 1 do
+                    local id = row[x] or 0
+                    local it = id ~= 0 and ItemDB[id]
+                    if it and it.kind == "seed" then
+                        local list = treesByRow[y]
+                        if not list then
+                            list = {}
+                            treesByRow[y] = list
+                        end
+                        list[#list + 1] = x
+                        treeAt[y * w.w + x] = true
+                    end
+                end
+            end
+        end
+
+        local baseDist = math.max(1, math.floor(tonumber(safeDist) or 3))
+        local dropHere = (tonumber(F.DropX) or -1) >= 0 and (tonumber(F.DropY) or -1) >= 0
+            and (F.DropWorld == "" or F.DropWorld == Guard.worldName())
+        local dropSafeR = math.max(3, (tonumber(State.CollectRadius) or 3) + 2)
+
+        local function rowClearanceOk(x, y, minStandDist, minOffDist)
+            if Move.isForbiddenFloor1Right(w, x, y) then return false end
+            if fgIdAt(x, y) ~= 0 or not openAt(x, y) or not realSupport(x, y) then
+                return false
+            end
+            local sameRowTrees = treesByRow[y]
+            if sameRowTrees then
+                for i = 1, #sameRowTrees do
+                    if math.abs(x - sameRowTrees[i]) < minStandDist then
+                        return false
+                    end
+                end
+            end
+            for _, o in ipairs(offs) do
+                local ox, oy = x + o.dx, y + o.dy
+                if ox < 0 or ox >= w.w or oy < 0 or oy >= w.h
+                    or (ox == x and oy == y + 1)
+                    or fgIdAt(ox, oy) ~= 0 or solidAt(ox, oy) or hazardAt(ox, oy)
+                    or treeAt[oy * w.w + ox] or not canWorkAt(ox, oy) then
+                    return false
+                end
+                local offRowTrees = treesByRow[oy]
+                if offRowTrees then
+                    for i = 1, #offRowTrees do
+                        if math.abs(ox - offRowTrees[i]) < minOffDist then
+                            return false
+                        end
+                    end
+                end
+            end
+            return true
+        end
+
+        local function pickReachable(candidates, limit)
+            if #candidates == 0 then return nil, nil end
+            table.sort(candidates, function(a, b) return a.score < b.score end)
+            local n = math.min(#candidates, limit or 25)
+            for i = 1, n do
+                local c = candidates[i]
+                if c.x == sx and c.y == sy then
+                    return sx, sy
+                end
+                local path = astar(sx, sy, { [c.y * w.w + c.x] = true, allowLongFall = true }, c.x, c.y, 0.5, false, nil, 0.15)
+                if path then
+                    return c.x, c.y
+                end
+            end
+            return nil, nil
+        end
+
+        local sameRowAttempts = {
+            { stand = baseDist + 1, off = math.max(2, baseDist) },
+            { stand = baseDist, off = math.max(1, baseDist - 1) },
+        }
+        if sy >= 0 and sy <= w.h - 2 then
+            for _, rule in ipairs(sameRowAttempts) do
+                local candidates = {}
+                for x = 0, w.w - 1 do
+                    if rowClearanceOk(x, sy, rule.stand, rule.off) then
+                        local score = math.abs(x - sx)
+                        if dropHere and math.max(math.abs(x - F.DropX), math.abs(sy - F.DropY)) < dropSafeR then
+                            score += 500
+                        end
+                        candidates[#candidates + 1] = { x = x, y = sy, score = score }
+                    end
+                end
+                local rx, ry = pickReachable(candidates, 30)
+                if rx then return rx, ry, nil end
+            end
+        end
+
+        if sameRowOnly then
+            return nil, nil, ("Belum ada ruang PnB >= %d tile di baris %d"):format(baseDist, sy)
+        end
+
+        local fallbackAttempts = {
+            { stand = baseDist + 1, off = math.max(2, baseDist) },
+            { stand = baseDist, off = math.max(1, baseDist - 1) },
+        }
+        for _, rule in ipairs(fallbackAttempts) do
+            local candidates = {}
+            for y = 0, w.h - 2 do
+                if y ~= sy then
+                    for x = 0, w.w - 1 do
+                        if rowClearanceOk(x, y, rule.stand, rule.off) then
+                            local score = math.abs(y - sy) * 6 + math.abs(x - sx)
+                            if dropHere and math.max(math.abs(x - F.DropX), math.abs(y - F.DropY)) < dropSafeR then
+                                score += 500
+                            end
+                            candidates[#candidates + 1] = { x = x, y = y, score = score }
+                        end
+                    end
+                end
+            end
+            local rx, ry = pickReachable(candidates, 25)
+            if rx then return rx, ry, nil end
+        end
+
+        return nil, nil, ("Tidak ada tile aman >= %d tile dari pohon"):format(baseDist)
+    end
+
+    local function restoreHarvestSettings()
+        local sv = F.SavedHarvest
+        if type(sv) ~= "table" then return end
+        if sv.Order ~= nil then Harvest.Order = sv.Order end
+        if sv.DropOn ~= nil then Harvest.DropOn = sv.DropOn end
+        if sv.DropSeedOn ~= nil then Harvest.DropSeedOn = sv.DropSeedOn end
+        if sv.CollectOn ~= nil then Harvest.CollectOn = sv.CollectOn end
+        F.SavedHarvest = nil
+    end
+
+    local function clearDropProtections()
+        Hvs.PickupUntil = 0
+        Hvs.MarkUntil = 0
+        Hvs.Dropping = false
+        if Hvs.DropBlock then table.clear(Hvs.DropBlock) end
+        Pabrik.Zone = nil
+        Supply.BlockCollectUntil = 0
+        table.clear(DropFailUntil)
+    end
+
+    local function runDropSeed(seedId, returnX, returnY, live)
+        local okPt, dx, dy = dropPointValid()
+        if not okPt then
+            F.Status = tostring(dx)
+            return false, dx
+        end
+        local w = Refs.World
+        local wn = Guard.worldName()
+        local function tripLive()
+            return live() and Refs.World == w and Guard.worldName() == wn
+        end
+
+        F.Phase = "Auto Drop Seed"
+        Hvs.Dropping = true
+        Hvs.DropLive = tripLive
+        Supply.BlockCollectUntil = os.clock() + 30
+        F.Status = ("Menuju titik drop (%d,%d)..."):format(dx, dy)
+
+        local reached = walkTo(dx, dy, 45, tripLive, nil, true, true)
+        if not reached or not tripLive() then
+            Hvs.Dropping, Hvs.DropLive = false, nil
+            Supply.BlockCollectUntil = os.clock() + 0.5
+            autoEnd()
+            releaseInput()
+            return false, "Gagal mencapai titik drop"
+        end
+
+        local cur = playerState()
+        if not cur or cur.dead or not cur.grounded then
+            Hvs.Dropping, Hvs.DropLive = false, nil
+            Supply.BlockCollectUntil = os.clock() + 0.5
+            autoEnd()
+            releaseInput()
+            return false, "Karakter belum siap drop"
+        end
+
+        local px, py = startNode(cur)
+        local prefDir = (tonumber(F.DropFacing) or 1) < 0 and -1 or 1
+        local dir = nil
+        if px + prefDir >= 0 and px + prefDir < w.w and openAt(px + prefDir, py) then
+            dir = prefDir
+        elseif px - prefDir >= 0 and px - prefDir < w.w and openAt(px - prefDir, py) then
+            dir = -prefDir
+        end
+        if not dir then
+            Hvs.Dropping, Hvs.DropLive = false, nil
+            Supply.BlockCollectUntil = os.clock() + 0.5
+            autoEnd()
+            releaseInput()
+            F.Status = "Tile depan arah drop terhalang"
+            return false, F.Status
+        end
+
+        F.Status = ("Menghadap arah %s..."):format(dir < 0 and "kiri" or "kanan")
+        hvsFace(dir, tripLive)
+        if not tripLive() then
+            Hvs.Dropping, Hvs.DropLive = false, nil
+            autoEnd()
+            releaseInput()
+            return false, "Dihentikan"
+        end
+
+        hvsHookPickup()
+        local guardSec = math.clamp(tonumber(F.DropGuardSec) or 2.5, 1, 5)
+        local function protect()
+            local untilT = os.clock() + guardSec
+            Hvs.PickupUntil = untilT
+            Hvs.MarkWorld = w
+            Hvs.MarkX, Hvs.MarkY, Hvs.MarkUntil, Hvs.MarkNext = px, py, untilT, 0
+            hvsMarkDropped(px, py, untilT)
+            Supply.BlockCollectUntil = untilT
+        end
+        protect()
+        local batch = { nextAt = 0, protect = function() protect() end }
+        local n = invCount(seedId)
+        local got, dropErr = 0, nil
+        if n > 0 then
+            F.Status = ("Drop %s x%d (arah %s)"):format(itemName(seedId), n, dir < 0 and "kiri" or "kanan")
+            got, dropErr = dropItems(seedId, n, tripLive, false, batch)
+            F.SeedsDropped += got
+            protect()
+        end
+
+        if tripLive() and type(returnX) == "number" and type(returnY) == "number" then
+            local backCur = playerState()
+            local bx, by = backCur and startNode(backCur)
+            if bx ~= returnX or by ~= returnY then
+                F.Status = ("Kembali ke posisi kerja (%d,%d)..."):format(returnX, returnY)
+                walkTo(returnX, returnY, 45, tripLive, nil, true, true)
+            end
+        end
+
+        Hvs.Dropping, Hvs.DropLive = false, nil
+        Supply.BlockCollectUntil = os.clock() + 1
+        autoEnd()
+        releaseInput()
+        if got > 0 then
+            F.Status = ("Berhasil drop %s x%d"):format(itemName(seedId), got)
+            return true, nil
+        end
+        F.Status = tostring(dropErr or "Drop seed gagal")
+        return false, dropErr
+    end
+
+    local function runPnBPhase(blockId, seedId, live)
+        local w = Refs.World
+        local s = playerState()
+        if not w or not s then return false, "Belum di world" end
+        local offs = parseFactoryOffsets()
+        if #offs == 0 then
+            F.Status = "Grid Tile di tab Auto PnB masih kosong!"
+            notify("Factory", F.Status, 5)
+            return false, F.Status
+        end
+        F.BlockId = blockId
+        if seedId then F.SeedId = seedId end
+        local sx, sy = startNode(s)
+        local tx, ty, spotErr = findSafePnBSpot(w, sx, sy, F.SafeDist, true)
+        if not tx and sy >= 0 and sy <= w.h - 2 and sy ~= hvsBottomRowY(w) then
+            local function clearForwardForPnB()
+                local clearCount = math.clamp(math.max(4, (tonumber(F.SafeDist) or 3) + 1), 3, 6)
+                local dir = hvsRowDirection(sy, w)
+
+                local function findNextReadyTreeAhead(curX, d, maxSteps)
+                    local limit = maxSteps or 12
+                    local st = workspace:GetServerTimeNow()
+                    for step = 0, limit do
+                        local x = curX + d * step
+                        if x < 0 or x >= w.w then break end
+                        local id = fgIdAt(x, sy)
+                        if id ~= 0 then
+                            local it = ItemDB[id]
+                            if it and it.kind == "seed" then
+                                local ra = treeReadyAt(x, sy, id)
+                                if ra and st >= ra and canWorkAt(x, sy)
+                                    and not Move.isForbiddenFloor1Right(w, x, sy) then
+                                    return x
+                                end
+                            elseif not openAt(x, sy) then
+                                break
+                            end
+                        elseif step >= 1 and not realSupport(x, sy) then
+                            break
+                        end
+                    end
+                    return nil
+                end
+
+                local activeDir = dir
+                if not findNextReadyTreeAhead(sx, activeDir, 6) then
+                    if findNextReadyTreeAhead(sx, -activeDir, 6) then
+                        activeDir = -activeDir
+                    else
+                        return nil, nil
+                    end
+                end
+
+                local hitInterval = math.clamp((tonumber(Hvs.HitMs) or 200) / 1000, 0.08, 0.35)
+                local lastX, lastY = sx, sy
+                for i = 1, clearCount do
+                    if not live() or Refs.World ~= w then break end
+                    local curS = playerState()
+                    if not curS or curS.dead then break end
+                    local curX, curY = startNode(curS)
+                    if curY ~= sy then break end
+                    lastX, lastY = curX, curY
+
+                    local targetX = findNextReadyTreeAhead(curX, activeDir, 10)
+                    if not targetX then break end
+
+                    local stX = nil
+                    for _, candX in ipairs({ targetX - activeDir, targetX + activeDir }) do
+                        if candX >= 0 and candX < w.w and openAt(candX, sy) and realSupport(candX, sy)
+                            and not Move.isForbiddenFloor1Right(w, candX, sy) then
+                            stX = candX
+                            break
+                        end
+                    end
+                    if not stX then break end
+
+                    if not curS.grounded or not hvsAtSpacing(curS, targetX, sy) then
+                        F.Phase = "Buka Ruang PnB"
+                        F.Status = ("Buka ruang PnB: menuju (%d,%d) [%d/%d]"):format(stX, sy, i, clearCount)
+                        local walked = walkTo(stX, sy, 8, live, nil, false, true)
+                        releaseInput()
+                        autoEnd()
+                        if not walked or not live() or Refs.World ~= w then break end
+                    end
+
+                    F.Phase = "Buka Ruang PnB"
+                    F.Status = ("Buka ruang PnB: panen (%d,%d) [%d/%d]"):format(targetX, sy, i, clearCount)
+                    for hit = 1, 6 do
+                        if not live() or Refs.World ~= w or fgIdAt(targetX, sy) == 0 then break end
+                        local curCheck = playerState()
+                        if not curCheck or curCheck.dead then break end
+                        if not curCheck.grounded or not hvsAtSpacing(curCheck, targetX, sy) then
+                            local movedOk = walkTo(stX, sy, 6, live, nil, false, true)
+                            releaseInput()
+                            autoEnd()
+                            if not movedOk or not live() then break end
+                        end
+                        local res = tryBreak(targetX, sy, false)
+                        if res == "broke" or fgIdAt(targetX, sy) == 0 then
+                            break
+                        end
+                        task.wait(hitInterval)
+                    end
+
+                    local afterS = playerState()
+                    if afterS and not afterS.dead then
+                        local ax, ay = startNode(afterS)
+                        lastX, lastY = ax, ay
+                        if ay == sy then
+                            local rx, ry = findSafePnBSpot(w, ax, sy, F.SafeDist, true)
+                            if rx then
+                                return rx, ry
+                            end
+                        end
+                    end
+                end
+
+                local finalS = playerState()
+                if finalS and not finalS.dead then
+                    lastX, lastY = startNode(finalS)
+                end
+                return findSafePnBSpot(w, lastX, sy, F.SafeDist, true)
+            end
+
+            local cx, cy = clearForwardForPnB()
+            if cx then
+                tx, ty = cx, cy
+            end
+            s = playerState()
+            if s then
+                sx, sy = startNode(s)
+            end
+        end
+        if not tx then
+            tx, ty, spotErr = findSafePnBSpot(w, sx, sy, F.SafeDist, false)
+        end
+        if not tx then
+            F.Status = tostring(spotErr or "Posisi PnB aman tidak ketemu")
+            notify("Factory", F.Status, 4)
+            return false, spotErr
+        end
+
+        F.Phase = "Menuju Posisi PnB"
+        F.PnbX, F.PnbY = tx, ty
+        if sx ~= tx or sy ~= ty then
+            F.Status = ("Jaga jarak >=%d tile ke (%d,%d)"):format(tonumber(F.SafeDist) or 3, tx, ty)
+            local moved = walkTo(tx, ty, 45, live, nil, true, true)
+            autoEnd()
+            releaseInput()
+            if not live() then return false, "Dihentikan" end
+            if not moved then
+                F.Status = ("Gagal jalan ke posisi PnB (%d,%d)"):format(tx, ty)
+                return false, F.Status
+            end
+        end
+
+        local function collectPnBPendingTiles()
+            local pending, seen = {}, {}
+            local function addCandidate(x, y, onlyBlock)
+                if type(x) ~= "number" or type(y) ~= "number" then return end
+                if x < 0 or y < 0 or x >= w.w or y >= w.h then return end
+                local key = x .. "," .. y
+                if seen[key] then return end
+                local fg = fgIdAt(x, y)
+                if fg == 0 or not canBreak(fg) then return end
+                local it = ItemDB[fg]
+                if it and it.kind == "seed" then return end
+                if onlyBlock and fg ~= blockId then return end
+                seen[key] = true
+                pending[#pending + 1] = { x = x, y = y }
+            end
+
+            local curS = playerState()
+            local curX, curY
+            if curS then curX, curY = startNode(curS) end
+
+            for _, o in ipairs(offs) do
+                addCandidate(tx + o.dx, ty + o.dy, false)
+                if curX and curY == ty and math.abs(curX - tx) <= 3 then
+                    addCandidate(curX + o.dx, curY + o.dy, true)
+                end
+                for dxShift = -2, 2 do
+                    addCandidate(tx + o.dx + dxShift, ty + o.dy, true)
+                end
+            end
+            for x = math.max(0, tx - 3), math.min(w.w - 1, tx + 3) do
+                addCandidate(x, ty, true)
+            end
+            for key in pairs(PlacedAt) do
+                local kx, ky = string.match(key, "^(-?%d+),(-?%d+)$")
+                kx, ky = tonumber(kx), tonumber(ky)
+                if kx and ky and math.abs(kx - tx) <= 4 and math.abs(ky - ty) <= 2 then
+                    addCandidate(kx, ky, false)
+                end
+            end
+
+            local refX, refY = curX or tx, curY or ty
+            table.sort(pending, function(a, b)
+                local da = math.abs(a.x - refX) + math.abs(a.y - refY)
+                local db = math.abs(b.x - refX) + math.abs(b.y - refY)
+                if da ~= db then return da < db end
+                if a.y ~= b.y then return a.y < b.y end
+                return a.x < b.x
+            end)
+            return pending
+        end
+
+        local function anyOffsetBreakable()
+            return #collectPnBPendingTiles() > 0
+        end
+
+        local function bestPunchStandTile(t)
+            if math.abs(tx - t.x) <= 2 and math.abs(ty - t.y) <= 1 and openAt(tx, ty) and realSupport(tx, ty) then
+                return tx, ty
+            end
+            local candidates = {
+                { x = t.x - 1, y = ty },
+                { x = t.x + 1, y = ty },
+                { x = t.x, y = ty },
+                { x = t.x - 1, y = t.y },
+                { x = t.x + 1, y = t.y },
+            }
+            for _, c in ipairs(candidates) do
+                if c.x >= 0 and c.y >= 0 and c.x < w.w and c.y < w.h
+                    and math.abs(c.x - t.x) <= 2 and math.abs(c.y - t.y) <= 2
+                    and openAt(c.x, c.y) and realSupport(c.x, c.y) then
+                    return c.x, c.y
+                end
+            end
+            return tx, ty
+        end
+
+        -- Block yang masih terpasang di tile PnB wajib dihancurkan sebelum keluar dari
+        -- fase PnB (stok habis, seed penuh/drop, watchdog, atau Factory dihentikan).
+        local function cleanupPnBTiles()
+            local deadline = os.clock() + 15
+            local function cleanLive()
+                return alive() and Refs.World == w and os.clock() < deadline
+            end
+            State.Running = false
+            State.Override = { offsets = State.Offsets, block = blockId, mode = "Break saja" }
+            State.Quiet = true
+            -- Tunggu singkat agar paket replikasi server dari place terakhir sempat masuk
+            -- dan melewati jendela anti-instant-break server (PLACE_GUARD = 0.32s).
+            if cleanLive() then
+                task.wait(0.38)
+            end
+            if live() then
+                local curS = playerState()
+                if curS then
+                    local cx, cy = startNode(curS)
+                    if cx ~= tx or cy ~= ty then
+                        walkTo(tx, ty, 20, live, nil, true, true)
+                        autoEnd()
+                        releaseInput()
+                    end
+                end
+            end
+            local lastStatus = F.Status
+            while cleanLive() do
+                local pending = collectPnBPendingTiles()
+                if #pending == 0 then
+                    task.wait(0.35)
+                    if not cleanLive() then break end
+                    pending = collectPnBPendingTiles()
+                    if #pending == 0 then break end
+                end
+                if F.Running then
+                    F.Phase = "Auto PnB"
+                    F.Status = ("Menghancurkan sisa block PnB (%d tile)..."):format(#pending)
+                end
+                for _, t in ipairs(pending) do
+                    if not cleanLive() then break end
+                    if live() then
+                        local curS = playerState()
+                        if curS then
+                            local cx, cy = startNode(curS)
+                            if math.abs(cy - t.y) > 1 or math.abs(cx - t.x) > 2 then
+                                local sxStand, syStand = bestPunchStandTile(t)
+                                if cx ~= sxStand or cy ~= syStand then
+                                    walkTo(sxStand, syStand, 15, live, nil, true, true)
+                                    autoEnd()
+                                    releaseInput()
+                                end
+                            end
+                        end
+                    end
+                    local pKey = t.x .. "," .. t.y
+                    local placedT = PlacedAt[pKey]
+                    if placedT then
+                        local age = os.clock() - placedT
+                        if age < 0.35 and cleanLive() then
+                            task.wait(0.35 - age)
+                        end
+                        PlacedAt[pKey] = nil
+                    end
+                    if not cleanLive() then break end
+                    pcall(tryBreak, t.x, t.y, false)
+                    task.wait(math.max(0.24, tonumber(State.RefillHitGate) or 0.22))
+                end
+            end
+            if F.Running then F.Status = lastStatus end
+            State.Override = nil
+            State.Quiet = false
+            return not anyOffsetBreakable()
+        end
+
+        local warnedNoDrop = false
+        local seedLimit = math.max(1, tonumber(F.SeedDropAt) or 200)
+        while live() and Refs.World == w and (invCount(blockId) > 0 or anyOffsetBreakable()) do
+            if seedId and invCount(seedId) >= seedLimit then
+                local ptOk, ptMsg = dropPointValid()
+                if ptOk then
+                    cleanupPnBTiles()
+                    if not live() then break end
+                    local okDrop = runDropSeed(seedId, tx, ty, live)
+                    if not live() then break end
+                    if not okDrop then task.wait(0.8) end
+                    continue
+                elseif not warnedNoDrop then
+                    warnedNoDrop = true
+                    notify("Factory", "Seed penuh (200) tapi " .. tostring(ptMsg), 5)
+                end
+            end
+
+            local curS = playerState()
+            if not curS or not live() then break end
+            local cx, cy = startNode(curS)
+            if cx ~= tx or cy ~= ty then
+                F.Status = ("Kembali ke titik PnB (%d,%d)"):format(tx, ty)
+                walkTo(tx, ty, 30, live, nil, true, true)
+                autoEnd()
+                releaseInput()
+                if not live() then break end
+            end
+
+            F.Phase = "Auto PnB"
+            F.Status = ("Auto PnB %s (stok: %d)"):format(itemName(blockId), invCount(blockId))
+            local mode = (State.Mode == "Place + Break (instan refill)" or State.Mode == "Place + Break")
+                and State.Mode or "Place + Break"
+            State.Override = { offsets = State.Offsets, block = blockId, mode = mode }
+            State.Quiet = true
+            table.clear(HitCount)
+            table.clear(PlacedAt)
+            table.clear(HitGateAt)
+            State.Running = true
+            State.RunId = (State.RunId or 0) + 1
+            local id = State.RunId
+            local broken0 = tonumber(State.Broken) or 0
+            local acts0 = (tonumber(State.Placed) or 0) + broken0
+            local lastActs, lastActAt = acts0, os.clock()
+
+            task.spawn(function()
+                while State.Running and State.RunId == id do
+                    task.wait(0.15)
+                    local acts = (tonumber(State.Placed) or 0) + (tonumber(State.Broken) or 0)
+                    if acts ~= lastActs then
+                        lastActs, lastActAt = acts, os.clock()
+                    end
+                    local sFull = seedId and invCount(seedId) >= seedLimit and dropPointValid()
+                    if not live() or Refs.World ~= w or sFull or (os.clock() - lastActAt > 10) then
+                        State.Running = false
+                    end
+                    if State.Running and F.Status then
+                        F.Status = ("Auto PnB %s (stok: %d | seed: %d)"):format(
+                            itemName(blockId), invCount(blockId), seedId and invCount(seedId) or 0
+                        )
+                    end
+                end
+            end)
+
+            local okRun, runErr
+            if mode == "Place + Break (instan refill)" then
+                okRun, runErr = pcall(UI.RefillLoop, id)
+            else
+                okRun, runErr = pcall(farmLoop, id)
+            end
+            State.Running = false
+            State.Override = nil
+            State.Quiet = false
+            if not okRun then
+                warn("[ByteHub] Factory PnB error: " .. tostring(runErr))
+            end
+            local brokenNow = tonumber(State.Broken) or 0
+            F.BlocksBroken += math.max(0, brokenNow - broken0)
+
+            local actsNow = (tonumber(State.Placed) or 0) + brokenNow
+            if actsNow == acts0 and invCount(blockId) > 0 and not (seedId and invCount(seedId) >= seedLimit) then
+                task.wait(0.4)
+                break
+            end
+        end
+
+        cleanupPnBTiles()
+        if alive() and Refs.World == w then
+            task.wait(0.35)
+            for _ = 1, 2 do
+                if not anyOffsetBreakable() then break end
+                cleanupPnBTiles()
+                if not (alive() and Refs.World == w) then break end
+                task.wait(0.35)
+            end
+        end
+        if live() and seedId and invCount(seedId) >= seedLimit and dropPointValid() then
+            runDropSeed(seedId, tx, ty, live)
+        end
+        F.PnbX, F.PnbY = -1, -1
+        return true, nil
+    end
+
+    local function runHarvestPhase(live)
+        local deadline = os.clock() + 5
+        while live() and (Hvs.WorkerActive or Hvs.HarvestWorkerBusy) and os.clock() < deadline do
+            task.wait(0.1)
+        end
+        if not live() then return "stopped" end
+
+        local wStart = Refs.World
+        if wStart then
+            local _, _, totalNow = scanWorldTrees(wStart)
+            if totalNow > 0 and not ensureFactoryTreeRefs(wStart) then
+                return "error", "Data waktu tumbuh pohon belum terbaca"
+            end
+        end
+
+        if not F.SavedHarvest then
+            F.SavedHarvest = {
+                Order = Harvest.Order,
+                DropOn = Harvest.DropOn,
+                DropSeedOn = Harvest.DropSeedOn,
+                CollectOn = Harvest.CollectOn,
+            }
+        end
+        Harvest.Order = "Bawah ke Atas"
+        Harvest.DropOn = false
+        Harvest.DropSeedOn = false
+        Harvest.CollectOn = true
+
+        F.Harvesting = true
+        F.Phase = "Auto Harvest"
+        F.Status = "Panen dari bawah (Auto Harvest)..."
+        local err = Hvs.start()
+        if err then
+            F.Harvesting = false
+            restoreHarvestSettings()
+            return "error", err
+        end
+
+        local emptyStreak = 0
+        while live() do
+            for _, bId in ipairs(Hvs.TypeIds or {}) do
+                if bId then
+                    F.TrackedBlocks[bId] = true
+                    if not F.BlockId then
+                        F.BlockId = bId
+                        F.SeedId = seedOfBlock(bId)
+                    end
+                end
+            end
+
+            local bId, bCount, sId = pickBlockForPnB(F.BlockLimit)
+            if bId then
+                F.Status = ("Block %s mencapai %d, pindah ke Auto PnB..."):format(itemName(bId), bCount)
+                Hvs.stop()
+                local waitStop = os.clock() + 4
+                while live() and (Hvs.WorkerActive or Hvs.HarvestWorkerBusy) and os.clock() < waitStop do
+                    task.wait(0.08)
+                end
+                F.Harvesting = false
+                restoreHarvestSettings()
+                return "pnb", bId, sId
+            end
+
+            local fullSeed = pickFullSeed()
+            if fullSeed and dropPointValid() then
+                F.Status = ("Seed %s mencapai batas drop (%d)..."):format(itemName(fullSeed), invCount(fullSeed))
+                Hvs.stop()
+                local waitStop = os.clock() + 4
+                while live() and (Hvs.WorkerActive or Hvs.HarvestWorkerBusy) and os.clock() < waitStop do
+                    task.wait(0.08)
+                end
+                F.Harvesting = false
+                restoreHarvestSettings()
+                return "dropseed", fullSeed
+            end
+
+            if not Hvs.Running then
+                F.Harvesting = false
+                restoreHarvestSettings()
+                return "stopped"
+            end
+
+            local w = Refs.World
+            if w and hvsTreeRefsReady(w) and not Hvs.TreeRefSearching then
+                local ready = Hvs.readyCount()
+                if ready == 0 and Hvs.PendingTarget == nil and not Hvs.HarvestBusy
+                    and not Hvs.HarvestWorkerBusy and Hvs.RowTransitionTarget == nil
+                    and #(Hvs.PendingCollect or {}) == 0 then
+                    emptyStreak += 1
+                    if emptyStreak >= 5 then
+                        Hvs.stop()
+                        local waitStop = os.clock() + 3
+                        while live() and (Hvs.WorkerActive or Hvs.HarvestWorkerBusy) and os.clock() < waitStop do
+                            task.wait(0.08)
+                        end
+                        task.wait(0.35)
+                        F.Harvesting = false
+                        restoreHarvestSettings()
+                        return "empty"
+                    end
+                else
+                    emptyStreak = 0
+                end
+            else
+                emptyStreak = 0
+            end
+            task.wait(0.2)
+        end
+
+        if Hvs.Running then Hvs.stop() end
+        F.Harvesting = false
+        restoreHarvestSettings()
+        return "stopped"
+    end
+
+    local function runAutoPlantPhase(seedId, live)
+        local wCheck = Refs.World
+        if not wCheck then return false, "World belum tersedia" end
+        local _, readyNow, totalNow = scanWorldTrees(wCheck)
+        if totalNow > 0 and not treeCoverageOk(wCheck) then
+            ensureFactoryTreeRefs(wCheck)
+            _, readyNow, totalNow = scanWorldTrees(wCheck)
+            if totalNow > 0 and not treeCoverageOk(wCheck) then
+                return false, "ready_tree"
+            end
+        end
+        if readyNow > 0 then
+            return false, "ready_tree"
+        end
+
+        clearDropProtections()
+        local waitOld = os.clock() + 4
+        while live() and plantState.workerActive and os.clock() < waitOld do
+            task.wait(0.1)
+        end
+        if not live() then return false end
+
+        plantState.autoTakeSeed = true
+        if plantState.controls and plantState.controls.autoTakeSeed then
+            pcall(plantState.controls.autoTakeSeed.Set, plantState.controls.autoTakeSeed, true, true)
+        end
+
+        pcall(findDropRefs, false)
+        pcall(ensureGameHooks)
+
+        local foundEntry, foundLabel = nil, nil
+        for attempt = 1, 3 do
+            if not live() then return false end
+            if scanSeedInventory then pcall(scanSeedInventory) end
+            for label, entry in pairs(seedByLabel) do
+                if type(entry) == "table" and tostring(entry.Id) == tostring(seedId) then
+                    foundEntry, foundLabel = entry, label
+                    break
+                end
+            end
+            if foundEntry then break end
+            task.wait(0.45)
+        end
+
+        if foundEntry and foundLabel then
+            selectedSeed = foundEntry
+            selectedSeedLabel = foundLabel
+            plantState.selectedSeedId = foundEntry.Id
+            plantState.selectedSeedName = foundEntry.Name
+            if seedDropdown then pcall(seedDropdown.Set, seedDropdown, foundLabel, true) end
+            if plantState.saveRealtime then pcall(plantState.saveRealtime) end
+        else
+            return false, "Seed belum terdaftar di Auto Plant"
+        end
+
+        if invCount(seedId) <= 0 and worldDropSeedCount(seedId) <= 0 then
+            return false, "Stok seed habis di inventory & world"
+        end
+
+        F.Planting = true
+        F.Phase = "Auto Plant"
+        F.Status = ("Menanam ulang %s..."):format(itemName(seedId))
+        plantState.skipBottomRow = true
+        if autoToggle then pcall(autoToggle.Set, autoToggle, true, true) end
+        if startScan then startScan() end
+
+        if not plantState.running and not plantState.workerActive then
+            plantState.skipBottomRow = false
+            F.Planting = false
+            return false, "Auto Plant gagal dimulai"
+        end
+
+        local nextReadyCheck = os.clock() + 1.5
+        while live() and (plantState.running or plantState.workerActive) do
+            if os.clock() >= nextReadyCheck then
+                nextReadyCheck = os.clock() + 1.5
+                if Refs.World == wCheck and hvsTreeRefsReady(wCheck) and Hvs.readyCount() > 0 then
+                    F.Status = "Pohon siap panen terdeteksi, menghentikan Auto Plant..."
+                    if stopAutoPlant then
+                        pcall(stopAutoPlant, "Pohon siap panen terdeteksi, lanjut Harvest")
+                    end
+                    local waitPlantStop = os.clock() + 2
+                    while live() and plantState.workerActive and os.clock() < waitPlantStop do
+                        task.wait(0.05)
+                    end
+                    plantState.skipBottomRow = false
+                    F.Planting = false
+                    return false, "ready_tree"
+                end
+            end
+            F.Status = ("Auto Plant %s (tertanam: %d)"):format(
+                itemName(seedId), tonumber(plantState.planted) or 0
+            )
+            task.wait(0.35)
+        end
+
+        if not live() and (plantState.running or plantState.workerActive) and stopAutoPlant then
+            pcall(stopAutoPlant, "Dihentikan karena Factory berhenti")
+        end
+        plantState.skipBottomRow = false
+        F.Planting = false
+        F.Cycles += 1
+        return true, nil
+    end
+
+    local function dropRemainingSeedsBeforeRotate(live)
+        local seeds, seen = {}, {}
+        local function addSeed(sid)
+            if sid and not seen[sid] then
+                seen[sid] = true
+                seeds[#seeds + 1] = sid
+            end
+        end
+        addSeed(F.SeedId)
+        if F.BlockId then addSeed(seedOfBlock(F.BlockId)) end
+        for bId in pairs(F.TrackedBlocks) do
+            addSeed(seedOfBlock(bId))
+        end
+        for _, bId in ipairs(Hvs.TypeIds or {}) do
+            addSeed(seedOfBlock(bId))
+        end
+        if selectedSeed and selectedSeed.Id then
+            addSeed(selectedSeed.Id)
+        end
+
+        local droppedAny = false
+        local warnedInvalid = false
+        for _, sid in ipairs(seeds) do
+            if not live() then break end
+            if invCount(sid) > 0 then
+                local ptOk, ptMsg = dropPointValid()
+                if ptOk then
+                    F.Phase = "Rotation"
+                    F.Status = ("Drop sisa seed %s x%d sebelum pindah world..."):format(itemName(sid), invCount(sid))
+                    local okDrop = runDropSeed(sid, nil, nil, live)
+                    if okDrop then droppedAny = true end
+                else
+                    if not warnedInvalid then
+                        warnedInvalid = true
+                        notify("Factory", "Rotation: titik drop belum valid (" .. tostring(ptMsg) .. "), skip drop sisa seed.", 4)
+                    end
+                    break
+                end
+            end
+        end
+        if droppedAny and live() then
+            task.wait(0.6)
+        end
+    end
+
+    local function rotateToNextWorld(nextWorld, nextIdx, live)
+        F.Rotating = true
+        F.Phase = "Rotation"
+        F.RotationIndex = nextIdx
+        F.RotationStatus = "Pindah ke " .. nextWorld
+        F.Status = ("Menyiapkan pindah world ke %s..."):format(nextWorld)
+
+        pcall(Config.save, true)
+        local staleRecFile = ROT_FOLDER .. "/reconnect_" .. tostring(LocalPlayer and LocalPlayer.UserId or 0) .. ".json"
+        if type(isfile) == "function" and type(delfile) == "function" then
+            local okEx, exists = pcall(isfile, staleRecFile)
+            if okEx and exists then pcall(delfile, staleRecFile) end
+        end
+        pcall(function()
+            TeleportService:SetTeleportSetting("ByteHub.AutoReconnect.v1", false)
+        end)
+        saveRotationPending(nextWorld, nextIdx)
+        queueFactoryLoader()
+
+        local delaySec = math.clamp(math.floor(tonumber(F.RotationDelaySec) or 3), 1, 15)
+        local delayEnd = os.clock() + delaySec
+        while live() and os.clock() < delayEnd do
+            F.Status = ("Rotation ke %s dalam %ds..."):format(nextWorld, math.max(1, math.ceil(delayEnd - os.clock())))
+            task.wait(0.25)
+        end
+        if not live() then
+            F.Rotating = false
+            clearRotationPending()
+            return "stopped"
+        end
+
+        local lastErr = nil
+        for attempt = 1, 3 do
+            if not live() then
+                F.Rotating = false
+                clearRotationPending()
+                return "stopped"
+            end
+            if normalizeRotationWorld(Guard.worldName()) ~= "" then
+                F.Status = ("Keluar dari world menuju %s (%d/3)..."):format(nextWorld, attempt)
+                pcall(Guard.leaveWorld)
+                local exitDead = os.clock() + 4
+                while live() and os.clock() < exitDead and normalizeRotationWorld(Guard.worldName()) ~= "" do
+                    task.wait(0.2)
+                end
+                if not live() then
+                    F.Rotating = false
+                    clearRotationPending()
+                    return "stopped"
+                end
+            end
+
+            F.Status = ("Masuk world %s (%d/3)..."):format(nextWorld, attempt)
+            local okEnter, enterErr, hopping = Guard.enterWorld(nextWorld)
+            if hopping == true then
+                F.RotationStatus = "Teleport ke " .. nextWorld
+                F.Status = ("Teleport server ke %s..."):format(nextWorld)
+                return "hopping"
+            end
+            if okEnter then
+                pcall(Guard.afterEnter)
+                F.BlockId = nil
+                F.SeedId = nil
+                table.clear(F.TrackedBlocks)
+                Refs.Trees = nil
+                Hvs.TreeRefCheckWorld = nil
+                Hvs.TreeRefCheckAt = 0
+                task.wait(1.5)
+                clearRotationPending()
+                F.Rotating = false
+                F.RotationStatus = "Aktif di " .. nextWorld
+                F.Status = ("Berhasil pindah ke %s"):format(nextWorld)
+                return "entered"
+            end
+
+            lastErr = enterErr
+            F.Status = ("Gagal masuk %s (%d/3): %s"):format(nextWorld, attempt, tostring(enterErr or ""))
+            local retryEnd = os.clock() + 3
+            while live() and os.clock() < retryEnd do
+                task.wait(0.25)
+            end
+        end
+
+        F.Rotating = false
+        clearRotationPending()
+        local worlds = parseRotationWorlds(F.RotationWorldsText)
+        if #worlds > 0 then
+            F.RotationIndex = (nextIdx % #worlds) + 1
+        end
+        F.RotationStatus = ("Gagal masuk %s"):format(nextWorld)
+        F.Status = lastErr and ("Rotation gagal (" .. nextWorld .. "): " .. tostring(lastErr)) or F.RotationStatus
+        return "failed"
+    end
+
+    local function factoryLoop(runId)
+        local function live()
+            return factoryLive(runId)
+        end
+        if Refs.World then
+            ensureFactoryTreeRefs(Refs.World)
+        elseif not Refs.Trees then
+            pcall(findTreeRefs)
+        end
+        local plantRetryAt = {}
+        local plantStageActive = false
+        local lastLoopWorld = nil
+
+        while live() do
+            if not Session.Ready or next(ItemDB) == nil then
+                F.Phase = "Memuat"
+                F.Status = "Menunggu data game & ItemDB siap..."
+                task.wait(0.3)
+                continue
+            end
+
+            local w = Refs.World
+            local s = playerState()
+            if not w or not s then
+                F.Phase = "Menunggu"
+                F.Status = "Menunggu world / karakter siap..."
+                task.wait(0.5)
+                continue
+            end
+
+            if w ~= lastLoopWorld then
+                lastLoopWorld = w
+                plantStageActive = false
+                table.clear(plantRetryAt)
+            end
+
+            local _, readyCount, totalTrees = scanWorldTrees(w)
+            if totalTrees > 0 and not treeCoverageOk(w) then
+                F.Phase = "Memindai"
+                F.Status = "Mencari timestamp pohon di world..."
+                ensureFactoryTreeRefs(w)
+                _, readyCount, totalTrees = scanWorldTrees(w)
+                if totalTrees > 0 and not treeCoverageOk(w) then
+                    F.Status = "Menunggu data waktu tumbuh pohon terbaca..."
+                    task.wait(1)
+                    continue
+                end
+            end
+
+            if readyCount > 0 then
+                plantStageActive = false
+            end
+
+            local fullSeed = pickFullSeed()
+            if fullSeed and dropPointValid() then
+                local rx, ry = startNode(s)
+                if runDropSeed(fullSeed, rx, ry, live) then
+                    table.clear(plantRetryAt)
+                else
+                    task.wait(1)
+                end
+                continue
+            end
+
+            -- Saat sudah masuk fase Auto Plant (atau world penuh pohon tumbuh tanpa siap panen),
+            -- block sisa/terpungut tidak boleh memicu Auto PnB lagi sampai siklus panen berikutnya.
+            if not plantStageActive and not F.Planting then
+                local fullBlock, _, fullSeedForBlock = pickBlockForPnB(F.BlockLimit)
+                if fullBlock then
+                    local okPnB = runPnBPhase(fullBlock, fullSeedForBlock, live)
+                    table.clear(plantRetryAt)
+                    if not okPnB then
+                        if totalTrees > 0 then
+                            plantStageActive = true
+                        else
+                            task.wait(1.5)
+                        end
+                    end
+                    continue
+                end
+            end
+
+            if readyCount > 0 then
+                plantStageActive = false
+                local res, a1, a2 = runHarvestPhase(live)
+                if res == "pnb" and a1 then
+                    runPnBPhase(a1, a2, live)
+                    table.clear(plantRetryAt)
+                elseif res == "dropseed" and a1 then
+                    local ps = playerState()
+                    local rx, ry = ps and startNode(ps)
+                    runDropSeed(a1, rx, ry, live)
+                    table.clear(plantRetryAt)
+                elseif res == "empty" then
+                    table.clear(plantRetryAt)
+                elseif res == "error" then
+                    F.Status = tostring(a1 or "Error Harvest")
+                    task.wait(1.5)
+                else
+                    task.wait(0.25)
+                end
+                continue
+            end
+
+            -- Pastikan tidak ada pohon siap panen sebelum menghabiskan sisa block < 200 atau Auto Plant.
+            task.wait(0.25)
+            if not live() then break end
+            if totalTrees > 0 and not treeCoverageOk(w) then
+                ensureFactoryTreeRefs(w)
+                if not treeCoverageOk(w) then continue end
+            end
+            local _, recheckReady = scanWorldTrees(w)
+            if recheckReady > 0 then
+                plantStageActive = false
+                continue
+            end
+
+            if not plantStageActive and not F.Planting then
+                local leftBlock, _, leftSeed = pickBlockForPnB(1)
+                if leftBlock then
+                    local okLeft = runPnBPhase(leftBlock, leftSeed, live)
+                    table.clear(plantRetryAt)
+                    if not okLeft then
+                        if totalTrees > 0 then
+                            plantStageActive = true
+                        else
+                            task.wait(1.5)
+                        end
+                    end
+                    continue
+                end
+            end
+
+            if hvsTreeRefsReady(w) and Hvs.readyCount() > 0 then
+                plantStageActive = false
+                continue
+            end
+
+            local now = os.clock()
+            local plantSeed = nil
+            local checkedSeeds = {}
+            local function trySeedCandidate(sid)
+                if plantSeed or not sid or checkedSeeds[sid] then return end
+                checkedSeeds[sid] = true
+                if now < (plantRetryAt[sid] or 0) then return end
+                if (invCount(sid) > 0 or worldDropSeedCount(sid) > 0) and hasPlantableSpot(w, sid) then
+                    plantSeed = sid
+                end
+            end
+            trySeedCandidate(F.SeedId)
+            if F.BlockId then trySeedCandidate(seedOfBlock(F.BlockId)) end
+            for bId in pairs(F.TrackedBlocks) do
+                trySeedCandidate(seedOfBlock(bId))
+            end
+            if not plantSeed and selectedSeed and selectedSeed.Id then
+                trySeedCandidate(selectedSeed.Id)
+            end
+
+            if plantSeed then
+                plantStageActive = true
+                local okPlant, plantWhy = runAutoPlantPhase(plantSeed, live)
+                if plantWhy == "ready_tree" then
+                    plantStageActive = false
+                else
+                    plantRetryAt[plantSeed] = os.clock() + (okPlant and 15 or 45)
+                end
+                continue
+            end
+
+            if F.RotationOn then
+                local worlds = parseRotationWorlds(F.RotationWorldsText)
+                if #worlds == 0 then
+                    F.RotationStatus = "Daftar world kosong"
+                else
+                    local nextWorld, nextIdx = nextRotationWorld(Guard.worldName())
+                    if nextWorld then
+                        dropRemainingSeedsBeforeRotate(live)
+                        if not live() then break end
+                        local rotRes = rotateToNextWorld(nextWorld, nextIdx, live)
+                        if rotRes == "hopping" then
+                            F.Running = false
+                            F.On = false
+                            break
+                        elseif rotRes == "entered" then
+                            plantStageActive = false
+                            table.clear(plantRetryAt)
+                            continue
+                        else
+                            task.wait(5)
+                            continue
+                        end
+                    end
+                end
+            end
+
+            F.Phase = "Menunggu"
+            if totalTrees > 0 then
+                F.Status = ("Menunggu %d pohon matang..."):format(totalTrees)
+            else
+                F.Status = "Semua panen & PnB selesai, menunggu pohon/lahan..."
+            end
+            task.wait(1.5)
+        end
+    end
+
+    function F.start()
+        if F.Running then return nil end
+        if F.WorkerActive then return "Tunggu proses Factory sebelumnya berhenti." end
+        if WorldFinder.Busy then return "Hentikan World Finder dulu sebelum menjalankan Factory." end
+        if AutoDrop.Busy then return "Tunggu Auto Drop selesai dulu." end
+        local err = checkAutoStart()
+        if err then return err end
+        if #parseFactoryOffsets() == 0 then
+            return "Pilih tile dulu di Grid Tile tab Auto PnB."
+        end
+
+        if State.Running then stopFarm("Dihentikan karena Factory dimulai") end
+        if Clear.Running and stopClear then stopClear("Dihentikan karena Factory dimulai") end
+        if Splice.Running and Splice.stop then Splice.stop("Dihentikan karena Factory dimulai") end
+        if Pabrik.Running and Pabrik.stop then Pabrik.stop("Dihentikan karena Factory dimulai") end
+        if Build.Running and Build.stop then Build.stop("Dihentikan karena Factory dimulai") end
+        if Vend.Running and Vend.stop then Vend.stop("Dihentikan karena Factory dimulai") end
+        if Hvs.Running then Hvs.stop("Dihentikan karena Factory dimulai") end
+        if (plantState.running or plantState.workerActive) and stopAutoPlant then
+            stopAutoPlant("Dihentikan karena Factory dimulai")
+        end
+
+        if not Refs.Trees then pcall(findTreeRefs) end
+        F.Rotating = false
+        F.Harvesting = false
+        F.Planting = false
+        F.PnbX, F.PnbY = -1, -1
+        F.Phase = "Memulai"
+        F.Status = "Memulai Factory..."
+        F.On = true
+        F.Running = true
+        F.WorkerActive = true
+        F.RunId = (F.RunId or 0) + 1
+        local id = F.RunId
+        if UI.FactoryToggle then pcall(function() UI.FactoryToggle:Set(true, true) end) end
+
+        task.spawn(function()
+            local ok, e = pcall(factoryLoop, id)
+            if not ok then
+                warn("[ByteHub] Factory error: " .. tostring(e))
+            end
+            F.WorkerActive = false
+            if F.RunId == id and F.Running then
+                F.stop(not ok and ("Error Factory: " .. tostring(e)) or nil)
+            end
+        end)
+        return nil
+    end
+
+    function F.stop(reason)
+        local was = F.Running
+        F.Running = false
+        F.On = false
+        F.RunId = (F.RunId or 0) + 1
+        F.Rotating = false
+        clearRotationPending()
+
+        if F.Harvesting or Hvs.Running then
+            pcall(Hvs.stop)
+        end
+        if State.Override and State.Running then
+            State.Running = false
+            State.Override = nil
+            State.Quiet = false
+        end
+        if F.Planting or plantState.running then
+            if stopAutoPlant then pcall(stopAutoPlant, "Dihentikan karena Factory berhenti") end
+        end
+        plantState.skipBottomRow = false
+
+        F.Harvesting = false
+        F.Planting = false
+        F.PnbX, F.PnbY = -1, -1
+        Hvs.Dropping, Hvs.DropLive = false, nil
+        restoreHarvestSettings()
+        autoEnd()
+        releaseInput()
+
+        F.Phase = "Mati"
+        F.Status = reason and ("Berhenti: " .. tostring(reason)) or "Mati"
+        if UI.FactoryToggle then pcall(function() UI.FactoryToggle:Set(false, true) end) end
+        if was and reason then
+            notify("Factory", F.Status, 4)
+        end
+    end
+
+    F.parseOffsets = parseFactoryOffsets
+    F.findSafeSpot = findSafePnBSpot
+    F.scanWorldTrees = scanWorldTrees
+    F.ensureTreeRefs = ensureFactoryTreeRefs
+    F.parseRotationWorlds = parseRotationWorlds
+    F.nextRotationWorld = nextRotationWorld
+    F.saveRotationPending = saveRotationPending
+    F.readRotationPending = readRotationPending
+    F.clearRotationPending = clearRotationPending
+
+    task.spawn(function()
+        local pending = readRotationPending()
+        if not pending then return end
+
+        local function applyPendingSettings(p)
+            F.RotationOn = true
+            if type(p.RotationWorldsText) == "string" and p.RotationWorldsText ~= "" then
+                F.RotationWorldsText = p.RotationWorldsText
+            end
+            if tonumber(p.RotationIndex) then
+                F.RotationIndex = math.max(1, math.floor(tonumber(p.RotationIndex)))
+            end
+            if tonumber(p.RotationDelaySec) then
+                F.RotationDelaySec = math.clamp(math.floor(tonumber(p.RotationDelaySec)), 1, 15)
+            end
+            if tonumber(p.DropX) and tonumber(p.DropY) then
+                F.DropX = tonumber(p.DropX)
+                F.DropY = tonumber(p.DropY)
+            end
+            if tonumber(p.DropFacing) then
+                F.DropFacing = tonumber(p.DropFacing) < 0 and -1 or 1
+            end
+            if tonumber(p.DropGuardSec) then
+                F.DropGuardSec = math.clamp(tonumber(p.DropGuardSec), 1, 5)
+            end
+            if tonumber(p.SafeDist) then
+                F.SafeDist = math.clamp(math.floor(tonumber(p.SafeDist)), 1, 8)
+            end
+            if tonumber(p.BlockLimit) then
+                F.BlockLimit = math.clamp(math.floor(tonumber(p.BlockLimit)), 20, 200)
+            end
+            if tonumber(p.SeedDropAt) then
+                F.SeedDropAt = math.clamp(math.floor(tonumber(p.SeedDropAt)), 50, 200)
+            end
+        end
+
+        F.Rotating = true
+        applyPendingSettings(pending)
+        F.RotationStatus = "Resume ke " .. tostring(pending.TargetWorld)
+
+        local readyDeadline = os.clock() + 30
+        while alive() and os.clock() < readyDeadline do
+            if Session.Ready and next(ItemDB) ~= nil then break end
+            task.wait(0.25)
+        end
+        if not alive() then
+            F.Rotating = false
+            return
+        end
+
+        applyPendingSettings(pending)
+        if UI.FactoryRotationToggle and UI.FactoryRotationToggle.Set then
+            pcall(UI.FactoryRotationToggle.Set, UI.FactoryRotationToggle, true, true)
+        end
+        if UI.FactoryRotationInput and UI.FactoryRotationInput.Set then
+            pcall(UI.FactoryRotationInput.Set, UI.FactoryRotationInput, tostring(F.RotationWorldsText or ""), true)
+        end
+        if UI.FactoryDropDir and UI.FactoryDropDir.Select then
+            pcall(UI.FactoryDropDir.Select, UI.FactoryDropDir, (F.DropFacing < 0) and "Kiri" or "Kanan")
+        end
+
+        local spawnWait = os.clock() + 5
+        while alive() and F.RotationOn and os.clock() < spawnWait do
+            if normalizeRotationWorld(Guard.worldName()) == pending.TargetWorld then break end
+            task.wait(0.25)
+        end
+
+        local cur = normalizeRotationWorld(Guard.worldName())
+        if cur ~= pending.TargetWorld and alive() and F.RotationOn then
+            saveRotationPending(pending.TargetWorld, F.RotationIndex)
+            queueFactoryLoader()
+            local entered = false
+            for _ = 1, 3 do
+                if not alive() or not F.RotationOn then break end
+                if normalizeRotationWorld(Guard.worldName()) ~= "" then
+                    pcall(Guard.leaveWorld)
+                    local exitDead = os.clock() + 4
+                    while alive() and os.clock() < exitDead and normalizeRotationWorld(Guard.worldName()) ~= "" do
+                        task.wait(0.2)
+                    end
+                end
+                local okE, _, hoppingE = Guard.enterWorld(pending.TargetWorld)
+                if hoppingE == true then
+                    return
+                end
+                if okE then
+                    entered = true
+                    break
+                end
+                task.wait(2.5)
+            end
+            if not entered then
+                clearRotationPending()
+                F.Rotating = false
+                F.RotationStatus = "Gagal resume masuk " .. tostring(pending.TargetWorld)
+                return
+            end
+        end
+
+        if not alive() or not F.RotationOn then
+            F.Rotating = false
+            return
+        end
+
+        pcall(Guard.afterEnter)
+        clearRotationPending()
+        F.Rotating = false
+        F.BlockId, F.SeedId = nil, nil
+        table.clear(F.TrackedBlocks)
+        F.RotationStatus = "Aktif di " .. tostring(pending.TargetWorld)
+        task.wait(1.5)
+        if alive() and F.RotationOn and not F.Running then
+            local startErr = F.start()
+            if startErr then
+                F.RotationStatus = "Gagal auto-start: " .. tostring(startErr)
+                notify("Factory Rotation", F.RotationStatus, 4)
+            end
+        end
+    end)
+end)() end
+
 -- Auto Plant berjalan di luar mount ini; ia memanggil ini supaya mesin farm
 -- berhenti lebih dulu (hanya satu mesin yang boleh aktif).
 Session.stopAllForPlant = function()
@@ -19452,6 +22060,9 @@ Session.stopAllForPlant = function()
     if Pabrik.Running then Pabrik.stop("Dihentikan karena Auto Plant dimulai") end
     if Build.Running then Build.stop("Dihentikan karena Auto Plant dimulai") end
     if Vend.Running and Vend.stop then Vend.stop("Dihentikan karena Auto Plant dimulai") end
+    if Session.Factory and Session.Factory.Running and not Session.Factory.Planting and Session.Factory.stop then
+        Session.Factory.stop("Dihentikan karena Auto Plant dimulai")
+    end
 end
 end)() end -- fungsi sendiri: variabel di dalam tidak ikut batas 200 local
 
@@ -19679,6 +22290,8 @@ local function plantRouteToSeed(matchesSeed, live)
     if not live() then return true end
 
     local drop = goalDrops[last and (last.y * w.w + last.x) or (sy * w.w + sx)]
+    if not drop then return false, nil end
+
     local arrived = playerState()
     if drop and arrived and arrived.grounded and (drop.n or 0) > 0
         and abs(drop.x - arrived.x) < 0.9 and drop.y < arrived.y - 0.9
@@ -19688,16 +22301,23 @@ local function plantRouteToSeed(matchesSeed, live)
         AutoInput.jump = false
     end
     waitNearDrops(0.6, live)
-    return true
+    return true, drop
 end
 
 local function plantFetchSeedDrops(seedId, live)
     live = live or function() return true end
     local initialStock = invCount(seedId)
-    local t0, stuck = os.clock(), 0
+    local t0 = os.clock()
     local wasActive = AutoInput.active
     local moveEpoch = beginPlantMove()
-    local matchesSeed = plantSeedDropFilter(seedId)
+    local baseMatchesSeed = plantSeedDropFilter(seedId)
+    local targetRetryAt = {}
+    local function matchesSeed(drop)
+        if not baseMatchesSeed(drop) then return false end
+        local retryKey = drop.uid or drop
+        local retryAt = targetRetryAt[retryKey]
+        return not retryAt or os.clock() >= retryAt
+    end
     local directAttempted = {}
 
     local function canFetch()
@@ -19712,9 +22332,14 @@ local function plantFetchSeedDrops(seedId, live)
         return canFetch() and invCount(seedId) <= 0
     end
 
-    -- Ambil seed yang cocok dari seluruh daftar drop world. Tidak membedakan
-    -- siapa yang menjatuhkan atau status armed. Jika server menolak percobaan
-    -- langsung, jalur gerak fisik di bawah tetap menjadi fallback.
+    local function targetStillExists(drop)
+        return type(drop) == "table"
+            and (tonumber(drop.n) or 0) > 0
+            and table.find(Drops.list or {}, drop) ~= nil
+    end
+
+    -- Percobaan remote awal tidak menggerakkan avatar. Jika gagal, target
+    -- tetap dicoba melalui rute fisik satu per satu di bawah.
     local function takeDroppedSeedsDirect()
         if not needsSeed() then return 0 end
         pcall(findDropRefs, false)
@@ -19746,29 +22371,71 @@ local function plantFetchSeedDrops(seedId, live)
                 if after > before then
                     collected += after - before
                 elseif uid ~= nil then
-                    -- Lepas cooldown percobaan langsung agar fallback gerak
-                    -- dapat mencoba drop yang sama melalui sentuhan karakter.
                     DropFailUntil[uid] = nil
-                    if type(Move.FetchFail) == "table" then Move.FetchFail[uid] = nil end
-                    if type(Move.FetchTry) == "table" then Move.FetchTry[uid] = nil end
                 end
-                task.wait(0.08)
+                task.wait(0.06)
             end
         end
         return collected
     end
 
-    local function clearSeedFetchFailures()
-        local wanted = tonumber(seedId) or seedId
-        for _, drop in pairs(Drops.list or {}) do
-            if type(drop) == "table"
-                and (tonumber(drop.id) or drop.id) == wanted
-                and (tonumber(drop.n) or 0) > 0 and drop.uid ~= nil then
-                DropFailUntil[drop.uid] = nil
-                if type(Move.FetchFail) == "table" then Move.FetchFail[drop.uid] = nil end
-                if type(Move.FetchTry) == "table" then Move.FetchTry[drop.uid] = nil end
+    -- Satu iterasi hanya memilih satu target. Target yang gagal diberi jeda
+    -- lokal agar rute berikutnya memilih drop lain, bukan bolak-balik ke titik
+    -- yang sama. Tidak ada lagi sapuan baris atau reposisi kanan-kiri.
+    local function approachAndTakeOne()
+        pcall(findDropRefs, false)
+        local routed, target = plantRouteToSeed(matchesSeed, canFetch)
+        if not canFetch() then return "cancelled" end
+        if not routed or not target then return "no-route" end
+        if not targetStillExists(target) then return "refreshed" end
+
+        local uid = target.uid
+        local before = invCount(seedId)
+        if uid ~= nil then DropFailUntil[uid] = nil end
+
+        -- Avatar sudah berada di pijakan terdekat dari satu target ini.
+        local directOK, directResult = pcall(takeDrop, target, true)
+        if not directOK then
+            AP_log("WARN", "Pickup target seed gagal: " .. tostring(directResult))
+        end
+        task.wait(0.12)
+
+        if invCount(seedId) > before or not targetStillExists(target) then
+            return "collected"
+        end
+        if not canFetch() then return "cancelled" end
+
+        -- Jika pickup langsung ditolak, dekati target yang sama. Jangan
+        -- berpindah ke drop lain sebelum upaya target ini selesai.
+        if type(Move.visitDrop) == "function" and targetStillExists(target) then
+            local visitOK, visitResult = pcall(Move.visitDrop, target, canFetch)
+            if not visitOK then
+                AP_log("WARN", "Gerak ke target seed gagal: " .. tostring(visitResult))
             end
         end
+        if not canFetch() then return "cancelled" end
+
+        if invCount(seedId) > before or not targetStillExists(target) then
+            return "collected"
+        end
+
+        -- Coba sekali lagi setelah avatar berada dekat drop.
+        if uid ~= nil then DropFailUntil[uid] = nil end
+        local retryOK, retryResult = pcall(takeDrop, target, true)
+        if not retryOK then
+            AP_log("WARN", "Retry pickup seed gagal: " .. tostring(retryResult))
+        end
+        task.wait(0.12)
+
+        if invCount(seedId) > before or not targetStillExists(target) then
+            return "collected"
+        end
+
+        -- Lewati sementara target yang tidak dapat diambil. Setelah cooldown
+        -- habis, target boleh dicoba lagi jika masih ada di world.
+        if uid ~= nil then DropFailUntil[uid] = nil end
+        targetRetryAt[uid or target] = os.clock() + 2.5
+        return "unavailable"
     end
 
     local okP, err = pcall(function()
@@ -19782,66 +22449,22 @@ local function plantFetchSeedDrops(seedId, live)
             local count = plantSeedDropCount(seedId)
             if not count or count == 0 then break end
 
-            local before = invCount(seedId)
             if needsSeed() then
                 takeDroppedSeedsDirect()
             end
-            if not canFetch() then break end
-            if needsSeed() then
-                plantRouteToSeed(matchesSeed, canFetch)
-            end
-            if not canFetch() then break end
+            if not canFetch() or not needsSeed() then break end
 
-            -- Fallback fisik tetap menyusuri world dan menyentuh setiap drop
-            -- seed yang cocok, termasuk drop yang belum armed.
-            clearSeedFetchFailures()
-            Move.fetchDrops(canFetch, 999, matchesSeed, 30, 3, true)
-            if not canFetch() then break end
+            local result = approachAndTakeOne()
+            if result == "cancelled" then break end
 
-            local after = invCount(seedId)
-            if after > before then
-                stuck = 0
-            elseif after > 0 then
-                break
-            else
-                local state = playerState()
-                if not state then break end
-
-                local remainingDrops = {}
-                local wanted = tonumber(seedId) or seedId
-                for _, drop in pairs(Drops.list or {}) do
-                    if type(drop) == "table"
-                        and (tonumber(drop.id) or drop.id) == wanted
-                        and (tonumber(drop.n) or 0) > 0 then
-                        remainingDrops[#remainingDrops + 1] = drop
-                    end
-                end
-                if #remainingDrops == 0 then break end
-
-                -- Reposisi diterapkan seragam pada semua seed dropped. Tidak
-                -- ada cabang berdasarkan pemilik atau status armed.
-                stuck += 1
-                if stuck > 8 then break end
-                clearSeedFetchFailures()
-
-                local nx, ny = startNode(state)
-                local movedAway = false
-                for _, dx in ipairs({ 4, -4, 5, -5, 3, -3 }) do
-                    if not needsSeed() or (plantSeedDropCount(seedId) or 0) == 0 then break end
-                    if walkTo(nx + dx, ny, 8, needsSeed) then
-                        movedAway = true
-                        break
-                    end
-                end
-                if not needsSeed() then break end
-                if not movedAway then
-                    task.wait(1)
-                else
-                    task.wait(0.5)
-                end
+            if result == "no-route" or result == "unavailable" or result == "refreshed" then
+                task.wait(0.35)
+            elseif result == "collected" then
+                task.wait(0.1)
             end
         end
     end)
+
     Move.Homing, Move.HomingLive = false, nil
     autoEnd()
     releaseInput()
@@ -21330,7 +23953,7 @@ do (function() -- fungsi sendiri: variabel di dalam tidak ikut batas 200 local
     local function anyRunning()
         return plantState.running or State.Running or Clear.Running or Splice.Running or Spam.On
             or Pabrik.Running or Build.Running or Vend.Running or AutoDrop.On or AutoDrop.Busy or WorldFinder.Busy
-            or Supply.Busy or Harvest.Running
+            or Supply.Busy or Harvest.Running or (Session.Factory and Session.Factory.Running)
     end
 
     -- Catat aktivitas yang sedang jalan (untuk dilanjutkan nanti)
@@ -21343,15 +23966,17 @@ do (function() -- fungsi sendiri: variabel di dalam tidak ikut batas 200 local
             and type(tx) == "number" and type(ty) == "number" then
             pnbX, pnbY = tx, ty
         end
+        local factoryOn = (Session.Factory and Session.Factory.Running == true) or false
         return {
-            plant = plantState.running,
+            plant = (not factoryOn) and plantState.running or false,
             plantSeedId = plantState.runSeedId or (selectedSeed and selectedSeed.Id),
-            farm = State.Running and not State.Override,
+            farm = (not factoryOn) and (State.Running and not State.Override) or false,
             pnbX = pnbX, pnbY = pnbY,
             clear = Clear.Running,
             clearTarget = Clear.TargetId,
             spam = Spam.On, splice = Splice.Running, pabrik = Pabrik.Running, build = Build.Running, vend = Vend.Running,
-            harvest = Harvest.Running,
+            harvest = (not factoryOn) and Harvest.Running or false,
+            factory = factoryOn,
             world = worldName(), tx = tx, ty = ty,
         }
     end
@@ -21364,6 +23989,9 @@ do (function() -- fungsi sendiri: variabel di dalam tidak ikut batas 200 local
         if AutoDrop.Busy and not forAutoDrop then AutoDrop.Cancelled = true end
         Supply.Busy, Supply.Need = false, false
         Auto.stopWalk()
+        if Session.Factory and Session.Factory.Running and Session.Factory.stop then
+            Session.Factory.stop("Dijeda untuk pemulihan world.")
+        end
         if (Harvest.Running or Harvest.WorkerActive or Harvest.HarvestWorkerBusy) and Harvest.stop then
             Harvest.stop("Dijeda untuk pemulihan world.")
         end
@@ -21405,6 +24033,27 @@ do (function() -- fungsi sendiri: variabel di dalam tidak ikut batas 200 local
     local function enterWorld(name)
         if type(name) ~= "string" or name == "" then
             return false, "nama world tidak diketahui"
+        end
+        local function enterFnReady()
+            local rm = Refs.Menu
+            if rm and type(rawget(rm, "enter")) == "function" then return true end
+            local rw = Refs.World
+            if rw and type(rawget(rw, "enter")) == "function" then return true end
+            return false
+        end
+        if not enterFnReady() then
+            local waitStart = os.clock()
+            local didDeepFind = false
+            while alive() and os.clock() - waitStart < 12 do
+                pcall(Anim.quickRefs)
+                if enterFnReady() then break end
+                if not didDeepFind and os.clock() - waitStart >= 3 then
+                    didDeepFind = true
+                    pcall(findRefs)
+                    if enterFnReady() then break end
+                end
+                task.wait(0.4)
+            end
         end
         local w = Refs.World
         local oldFg = w and rawget(w, "fg")
@@ -21451,6 +24100,11 @@ do (function() -- fungsi sendiri: variabel di dalam tidak ikut batas 200 local
         local function workerBusy(kind)
             if kind == "plant" then
                 return plantState.workerActive == true
+            elseif kind == "factory" then
+                return (Session.Factory and Session.Factory.WorkerActive == true)
+                    or Harvest.WorkerActive == true
+                    or Harvest.HarvestWorkerBusy == true
+                    or plantState.workerActive == true
             end
             return Harvest.WorkerActive == true or Harvest.HarvestWorkerBusy == true
         end
@@ -21560,6 +24214,52 @@ do (function() -- fungsi sendiri: variabel di dalam tidak ikut batas 200 local
             if active() then Build.start() end
         elseif saved.pabrik then
             if active() then Pabrik.start() end
+        elseif saved.factory then
+            if active() and Session.Factory and Session.Factory.start then
+                local workerReady = waitWorkerIdle("factory", 30)
+                if not workerReady and active() and Session.Factory.stop then
+                    pcall(Session.Factory.stop, "Dibatalkan untuk pemulihan setelah Guard kembali ke world")
+                    workerReady = waitWorkerIdle("factory", 15)
+                end
+                if not active() then return end
+                if not workerReady then
+                    if UI.FactoryToggle then pcall(function() UI.FactoryToggle:Set(true) end) end
+                    notify("Penjaga", "Factory masih menunggu worker sebelumnya berhenti. Tidak dibuat worker ganda.", 6)
+                    return
+                end
+
+                hooks = nil
+                local started, lastError = false, nil
+                for attempt = 1, 4 do
+                    if not active() then return end
+                    if Session.Factory.ensureTreeRefs and Refs.World then
+                        pcall(Session.Factory.ensureTreeRefs, Refs.World)
+                    elseif not Refs.Trees then
+                        pcall(findTreeRefs)
+                    end
+                    lastError = Session.Factory.start()
+                    if not lastError and Session.Factory.Running then
+                        started = true
+                        break
+                    end
+                    if attempt < 4 then
+                        pcall(Anim.quickRefs)
+                        if Session.Factory.ensureTreeRefs and Refs.World then
+                            pcall(Session.Factory.ensureTreeRefs, Refs.World)
+                        elseif not Refs.Trees then
+                            pcall(findTreeRefs)
+                        end
+                        task.wait(1)
+                    end
+                end
+
+                if started then
+                    if UI.FactoryToggle then pcall(function() UI.FactoryToggle:Set(true) end) end
+                else
+                    if UI.FactoryToggle then pcall(function() UI.FactoryToggle:Set(false) end) end
+                    notify("Penjaga", "Factory belum berhasil aktif setelah kembali ke world: " .. tostring(lastError or "worker belum aktif"), 6)
+                end
+            end
         elseif saved.vend then
             if active() then Vend.start() end
         elseif saved.harvest then
@@ -21929,6 +24629,16 @@ do (function() -- fungsi sendiri: variabel di dalam tidak ikut batas 200 local
         end,
         isReady = function()
             return alive() and Session.Ready == true
+        end,
+        isEnterReady = function()
+            if not alive() then return false end
+            if (Refs.Menu and type(rawget(Refs.Menu, "enter")) == "function")
+                or (Refs.World and type(rawget(Refs.World, "enter")) == "function") then
+                return true
+            end
+            pcall(Anim.quickRefs)
+            return (Refs.Menu and type(rawget(Refs.Menu, "enter")) == "function")
+                or (Refs.World and type(rawget(Refs.World, "enter")) == "function")
         end,
         getWorld = function()
             return worldName()
@@ -22787,6 +25497,281 @@ do (function()
         })
     end)
 end)() end
+--// --- UI: TAB FACTORY ---
+do (function()
+    local F = Session.Factory
+    local tab = makeTab("Factory", "factory", "Auto Farm")
+    local main = box(tab, "FACTORY", true)
+
+    safe(function()
+        UI.FactoryToggle = main:Toggle({
+            Title = "Jalankan Factory",
+            Desc = "Harvest dari bawah -> PnB jarak aman -> Auto Drop Seed -> Auto Plant.",
+            Value = false,
+            Callback = function(on)
+                if on then
+                    local err = nil
+                    if type(F.start) == "function" then
+                        err = F.start()
+                    else
+                        err = "Mesin Factory belum siap"
+                    end
+                    if err then
+                        notify("Factory", err, 4)
+                        if UI.FactoryToggle then pcall(function() UI.FactoryToggle:Set(false, true) end) end
+                    end
+                else
+                    if F.stop then F.stop("Dihentikan dari toggle.") end
+                end
+            end,
+        })
+    end)
+
+    safe(function()
+        UI.FactoryStatus = main:Paragraph({
+            Title = "Status Factory",
+            Desc = "Fase: Mati\nStatus: Mati",
+        })
+    end)
+
+    local dropBox = box(tab, "TITIK DROP SEED", true)
+    safe(function()
+        UI.FactoryDropDir = dropBox:Dropdown({
+            Title = "Arah Drop Seed",
+            Desc = "Arah hadap saat drop seed di titik drop.",
+            Values = { "Kanan", "Kiri" },
+            Value = ((F.DropFacing or 1) < 0) and "Kiri" or "Kanan",
+            Callback = function(v)
+                if type(v) == "table" then v = v[1] end
+                F.DropFacing = (v == "Kiri") and -1 or 1
+                if Session.Ready then Config.requestSave() end
+            end,
+        })
+    end)
+
+    safe(function()
+        dropBox:Button({
+            Title = "Set Titik Drop",
+            Desc = "Berdiri di tile drop & menghadap arah drop, lalu tekan.",
+            ButtonText = "Set Tile",
+            Callback = function()
+                local s = Auto.playerState and Auto.playerState()
+                if not s then notify("Factory", "Masuk world dulu", 4) return end
+                local x, y = Auto.startNode(s)
+                if not Auto.openAt(x, y) or not Auto.realSupport(x, y) then
+                    notify("Factory", "Berdiri di tile kosong dengan pijakan aman", 4)
+                    return
+                end
+                F.DropX, F.DropY = x, y
+                F.DropWorld = Guard.worldName()
+                F.DropFacing = ((s.facing or 1) < 0) and -1 or 1
+                if UI.FactoryDropDir and UI.FactoryDropDir.Select then
+                    pcall(UI.FactoryDropDir.Select, UI.FactoryDropDir, (F.DropFacing < 0) and "Kiri" or "Kanan")
+                end
+                if Session.Ready then Config.requestSave() end
+                notify("Factory", ("Titik drop diatur (%d,%d) arah %s"):format(
+                    x, y, F.DropFacing < 0 and "Kiri" or "Kanan"
+                ), 4)
+            end,
+        })
+    end)
+
+    safe(function()
+        dropBox:Button({
+            Title = "Hapus Titik Drop",
+            ButtonText = "Hapus",
+            Callback = function()
+                F.DropX, F.DropY = -1, -1
+                F.DropWorld = ""
+                if Session.Ready then Config.requestSave() end
+                notify("Factory", "Titik drop dihapus.", 3)
+            end,
+        })
+    end)
+
+    local rotBox = box(tab, "ROTATION WORLD", true)
+    safe(function()
+        UI.FactoryRotationToggle = rotBox:Toggle({
+            Title = "Aktifkan Rotation",
+            Desc = "Otomatis pindah ke world berikutnya saat semua task selesai (loop).",
+            Value = F.RotationOn == true,
+            Callback = function(on)
+                F.RotationOn = on == true
+                F.RotationStatus = F.RotationOn and "Aktif" or "Nonaktif"
+                if not F.RotationOn and F.clearRotationPending then
+                    pcall(F.clearRotationPending)
+                end
+                if Session.Ready then Config.requestSave() end
+            end,
+        })
+    end)
+
+    safe(function()
+        UI.FactoryRotationInput = rotBox:Input({
+            Title = "Daftar World Rotation",
+            Placeholder = "Contoh: SKG, SKG2, SKG3",
+            Value = tostring(F.RotationWorldsText or ""),
+            Live = true,
+            Callback = function(value, isFinal)
+                F.RotationWorldsText = tostring(value or "")
+                if F.parseRotationWorlds then
+                    local worlds = F.parseRotationWorlds(F.RotationWorldsText)
+                    if F.RotationOn then
+                        F.RotationStatus = #worlds > 0 and ("Siap (" .. #worlds .. " world)") or "Daftar world kosong"
+                    end
+                end
+                if Session.Ready then Config.requestSave(isFinal == true) end
+            end,
+        })
+    end)
+
+    safe(function()
+        rotBox:Button({
+            Title = "Tambah World Ini",
+            Desc = "Tambahkan world yang sedang dimasuki ke daftar Rotation.",
+            ButtonText = "Tambah",
+            Callback = function()
+                local wn = tostring(Guard.worldName() or ""):upper():gsub("[^A-Z0-9]", "")
+                if wn == "" then
+                    notify("Factory Rotation", "Masuk world terlebih dahulu.", 4)
+                    return
+                end
+                local worlds = F.parseRotationWorlds and F.parseRotationWorlds(F.RotationWorldsText) or {}
+                for _, existing in ipairs(worlds) do
+                    if existing == wn then
+                        notify("Factory Rotation", wn .. " sudah ada di daftar Rotation.", 3)
+                        return
+                    end
+                end
+                worlds[#worlds + 1] = wn
+                local updated = table.concat(worlds, ", ")
+                F.RotationWorldsText = updated
+                if UI.FactoryRotationInput and UI.FactoryRotationInput.Set then
+                    pcall(UI.FactoryRotationInput.Set, UI.FactoryRotationInput, updated)
+                end
+                if F.RotationOn then
+                    F.RotationStatus = "Siap (" .. #worlds .. " world)"
+                end
+                if Session.Ready then Config.requestSave(true) end
+                notify("Factory Rotation", "Ditambahkan: " .. wn, 3)
+            end,
+        })
+    end)
+
+    safe(function()
+        rotBox:Button({
+            Title = "Hapus Daftar World",
+            ButtonText = "Hapus",
+            Callback = function()
+                F.RotationWorldsText = ""
+                F.RotationIndex = 1
+                F.RotationStatus = F.RotationOn and "Daftar world kosong" or "Nonaktif"
+                if UI.FactoryRotationInput and UI.FactoryRotationInput.Set then
+                    pcall(UI.FactoryRotationInput.Set, UI.FactoryRotationInput, "")
+                end
+                if Session.Ready then Config.requestSave(true) end
+                notify("Factory Rotation", "Daftar world Rotation dikosongkan.", 3)
+            end,
+        })
+    end)
+
+    addNumber(rotBox, {
+        Title = "Jeda Pindah World (detik)",
+        Min = 1, Max = 15, Step = 1, Default = F.RotationDelaySec,
+        Callback = function(v)
+            F.RotationDelaySec = math.clamp(math.floor(v), 1, 15)
+            if Session.Ready then Config.requestSave() end
+        end,
+    })
+
+    local cfgBox = box(tab, "PENGATURAN", false)
+    addNumber(cfgBox, {
+        Title = "Jarak Aman Pohon (Tile)",
+        Min = 1, Max = 8, Step = 1, Default = F.SafeDist,
+        Callback = function(v)
+            F.SafeDist = math.clamp(math.floor(v), 1, 8)
+            if Session.Ready then Config.requestSave() end
+        end,
+    })
+    addNumber(cfgBox, {
+        Title = "Batas Block -> PnB",
+        Min = 20, Max = 200, Step = 10, Default = F.BlockLimit,
+        Callback = function(v)
+            F.BlockLimit = math.clamp(math.floor(v), 20, 200)
+            if Session.Ready then Config.requestSave() end
+        end,
+    })
+    addNumber(cfgBox, {
+        Title = "Batas Drop Seed",
+        Min = 50, Max = 200, Step = 10, Default = F.SeedDropAt,
+        Callback = function(v)
+            F.SeedDropAt = math.clamp(math.floor(v), 50, 200)
+            if Session.Ready then Config.requestSave() end
+        end,
+    })
+    addNumber(cfgBox, {
+        Title = "Blokir Pickup Drop (detik)",
+        Min = 1, Max = 5, Step = 0.5, Default = F.DropGuardSec,
+        Callback = function(v)
+            F.DropGuardSec = math.clamp(tonumber(v) or 2.5, 1, 5)
+            if Session.Ready then Config.requestSave() end
+        end,
+    })
+
+    task.spawn(function()
+        while alive() do
+            task.wait(0.5)
+            if UI.FactoryToggle and UI.FactoryToggle.Get and UI.FactoryToggle:Get() ~= (F.Running == true) then
+                pcall(function() UI.FactoryToggle:Set(F.Running == true) end)
+            end
+            if UI.FactoryRotationToggle and UI.FactoryRotationToggle.Get and UI.FactoryRotationToggle:Get() ~= (F.RotationOn == true) then
+                pcall(function() UI.FactoryRotationToggle:Set(F.RotationOn == true) end)
+            end
+            if UI.FactoryStatus then
+                local dropText = (tonumber(F.DropX) or -1) >= 0
+                    and ("(%d,%d) %s | %s"):format(
+                        F.DropX, F.DropY, (F.DropWorld ~= "" and F.DropWorld or "-"),
+                        (F.DropFacing or 1) < 0 and "Kiri" or "Kanan"
+                    )
+                    or "Belum diatur"
+                local itemText = F.BlockId and (itemName(F.BlockId) .. " (" .. invCount(F.BlockId) .. ")") or "-"
+                local seedText = F.SeedId and (itemName(F.SeedId) .. " (" .. invCount(F.SeedId) .. ")") or "-"
+                local worlds = F.parseRotationWorlds and F.parseRotationWorlds(F.RotationWorldsText) or {}
+                local rotLine
+                if F.RotationOn == true then
+                    if #worlds == 0 then
+                        rotLine = "ON (Daftar world kosong)"
+                    else
+                        local curW = tostring(Guard.worldName() or ""):upper():gsub("[^A-Z0-9]", "")
+                        local curIdx = nil
+                        for i, wn in ipairs(worlds) do
+                            if wn == curW then curIdx = i break end
+                        end
+                        local nextW = F.nextRotationWorld and F.nextRotationWorld(curW) or nil
+                        local posText = curIdx and (tostring(curIdx) .. "/" .. tostring(#worlds)) or ("-/" .. tostring(#worlds))
+                        rotLine = ("ON (%s) | Next: %s | %s"):format(
+                            posText, tostring(nextW or "-"), tostring(F.RotationStatus or "Aktif")
+                        )
+                    end
+                else
+                    rotLine = ("OFF (%d world)"):format(#worlds)
+                end
+                local text = ("Fase: %s\nStatus: %s\nBlock: %s | Seed: %s\nTitik Drop: %s\nRotation: %s\nSiklus: %d | Seed Drop: %d | Break: %d"):format(
+                    tostring(F.Phase or "Mati"),
+                    tostring(F.Status or "Mati"),
+                    itemText,
+                    seedText,
+                    dropText,
+                    rotLine,
+                    tonumber(F.Cycles) or 0,
+                    tonumber(F.SeedsDropped) or 0,
+                    tonumber(F.BlocksBroken) or 0
+                )
+                pcall(function() UI.FactoryStatus:SetDesc(text) end)
+            end
+        end
+    end)
+end)() end
 --// ============================================================
 --//  FARM SUITE: INIT / CLEANUP
 --// ============================================================
@@ -22798,7 +25783,7 @@ local function farmReconnect(show)
     Refs.Gems, Refs.Hud, Refs.Others, Refs.Arm = nil, nil, nil, nil
     Refs.Particles, Anim.Particles = {}, nil
     -- Reset hook sebelum discovery, bukan sesudah quickRefs menemukannya.
-    Anim.fn, Anim.idx, Anim.set = nil, nil, nil
+    Anim.fn, Anim.idx, Anim.set, Anim.ctx = nil, nil, nil, nil
     Anim.BindName, Anim.BindReason = nil, nil
     if pcall(Anim.quickRefs) and Refs.Inv then
         pcall(doInvRefresh, true)
@@ -22821,15 +25806,15 @@ local function farmReconnect(show)
     -- Koneksi render/input kadang baru lengkap setelah seluruh referensi world ditemukan.
     pcall(Anim.quickRefs)
     pcall(Anim.findFast)
-    if not Anim.fn then
+    if not (Anim.ctx or Anim.fn) then
         -- Hook animasi dapat terdaftar sedikit lebih lambat dari GameReady.
         task.spawn(function()
             for attempt, delay in ipairs({ 1, 2, 4 }) do
                 task.wait(delay)
-                if not alive() or Anim.fn then return end
+                if not alive() or Anim.ctx or Anim.fn then return end
                 pcall(Anim.findFast)
-                if not Anim.fn then pcall(Anim.quickRefs) end
-                if Anim.fn then
+                if not (Anim.ctx or Anim.fn) then pcall(Anim.quickRefs) end
+                if Anim.ctx or Anim.fn then
                     pcall(updateStatus)
                     return
                 end
@@ -22931,8 +25916,11 @@ do (function()
             Value = State.Visual,
             Callback = function(on)
                 State.Visual = on == true
-                if on and not Anim.fn and Refs.World then
-                    notify("General", "Fungsi animasi game belum ditemukan. Coba Hubungkan ke Game.", 4)
+                if on and not (Anim.ctx or Anim.fn) and Refs.World then
+                    pcall(Anim.findCtx)
+                    if not (Anim.ctx or Anim.fn) then
+                        notify("General", "Fungsi animasi game belum ditemukan. Coba Hubungkan ke Game.", 4)
+                    end
                 end
                 saveGeneral()
             end,
@@ -23087,6 +26075,7 @@ local function farmCleanup()
     State.Running, Clear.Running, Spam.On = false, false, false
     if Config.AutoSave then pcall(Config.save, false) end
     Guard.On, Splice.Running, Pabrik.Running, Build.Running = false, false, false, false
+    if Session.Factory and Session.Factory.stop then pcall(Session.Factory.stop) end
     Harvest.Running, Harvest.On = false, false
     Harvest.Dropping, Harvest.MarkUntil = false, 0
     Harvest.PickupUntil = 0
@@ -23221,7 +26210,9 @@ loadConfig(true)
             return connection
         end
 
-        local DEFAULT_LOADER_URL = "https://raw.githubusercontent.com/brbrpatapimm/plerr/main/NewUI_Second_93.lua"
+        local DEFAULT_LOADER_URL = "https://raw.githubusercontent.com/brbrpatapimm/plerr/main/NewUI_Second_95.lua"
+        local PREVIOUS_LOADER_URL_V94 = "https://raw.githubusercontent.com/brbrpatapimm/plerr/main/NewUI_Second_94.lua"
+        local PREVIOUS_LOADER_URL_V93 = "https://raw.githubusercontent.com/brbrpatapimm/plerr/main/NewUI_Second_93.lua"
         local PREVIOUS_LOADER_URL_V92 = "https://raw.githubusercontent.com/brbrpatapimm/plerr/main/NewUI_Second_92.lua"
         local PREVIOUS_LOADER_URL_V91 = "https://raw.githubusercontent.com/brbrpatapimm/plerr/main/NewUI_Second_91.lua"
         local PREVIOUS_LOADER_URL_V90 = "https://raw.githubusercontent.com/brbrpatapimm/plerr/main/NewUI_Second_90.lua"
@@ -23234,6 +26225,8 @@ loadConfig(true)
         local function normalizeLoaderUrl(value)
             local url = tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
             if url == "" or url == LEGACY_LOADER_URL
+                or url == PREVIOUS_LOADER_URL_V94
+                or url == PREVIOUS_LOADER_URL_V93
                 or url == PREVIOUS_LOADER_URL_V92
                 or url == PREVIOUS_LOADER_URL_V91
                 or url == PREVIOUS_LOADER_URL_V90
@@ -23262,6 +26255,7 @@ loadConfig(true)
 
         local Reconnect = {
             On = false,
+            Fallback = true,
             World = true,
             Server = true,
             Keep = false,
@@ -23282,7 +26276,7 @@ loadConfig(true)
             CycleWorld = "",
         }
 
-        local CYCLE_FEATURES = { "Auto PnB", "Auto Plant", "Auto Harvest" }
+        local CYCLE_FEATURES = { "Auto PnB", "Auto Plant", "Auto Harvest", "Factory" }
         local CYCLE_INTERVALS = { "5 Minutes", "10 Minutes", "15 Minutes", "30 Minutes", "Custom" }
 
         local function normalizeCycleFeatures(values)
@@ -23313,7 +26307,7 @@ loadConfig(true)
         Reconnect.CycleCustomMinutes = math.clamp(math.floor(tonumber(Reconnect.CycleCustomMinutes) or 5), 1, 1440)
 
         local CONFIG_KEYS = {
-            "On", "World", "Server", "Keep",
+            "On", "Fallback", "World", "Server", "Keep",
             "DelaySec", "LoaderUrl", "Target",
             "CycleOn", "CycleFeatures", "CycleIntervalMode", "CycleCustomMinutes", "CycleIndex", "CycleWorld",
         }
@@ -23333,9 +26327,7 @@ loadConfig(true)
         Reconnect.CycleIndex = math.max(1, math.floor(tonumber(Reconnect.CycleIndex) or 1))
         Reconnect.CycleWorld = type(Reconnect.CycleWorld) == "string" and Reconnect.CycleWorld or ""
 
-        local storedLoaderUrl = tostring(Reconnect.LoaderUrl or "")
-        Reconnect.LoaderUrl = normalizeLoaderUrl(Reconnect.LoaderUrl)
-        local loaderUrlNeedsSave = storedLoaderUrl ~= Reconnect.LoaderUrl
+        -- Loader URL dinormalisasi setelah penyimpanan khusus Auto Reconnect dimuat.
 
         local HttpService = game:GetService("HttpService")
         local TeleportService = game:GetService("TeleportService")
@@ -23363,22 +26355,40 @@ loadConfig(true)
         end
 
         local function saveConfig()
-            if type(Bridge.saveConfig) == "function" then
-                pcall(Bridge.saveConfig, true)
-            elseif type(Bridge.saveCycleConfig) == "function" then
-                pcall(Bridge.saveCycleConfig)
+            local persistentSaved = false
+            if type(Runtime.PersistSettings) == "function" then
+                local ok, result = pcall(Runtime.PersistSettings)
+                persistentSaved = ok and result == true
             end
+
+            local configSaved = false
+            if type(Bridge.saveConfig) == "function" then
+                local ok, result = pcall(Bridge.saveConfig, true)
+                configSaved = ok and result == true
+            elseif type(Bridge.saveCycleConfig) == "function" then
+                local ok, result = pcall(Bridge.saveCycleConfig)
+                configSaved = ok and result == true
+            end
+            return persistentSaved or configSaved
         end
 
         local function saveCycleConfig()
-            if type(Bridge.saveCycleConfig) == "function" then
-                pcall(Bridge.saveCycleConfig)
-            else
-                saveConfig()
+            local persistentSaved = false
+            if type(Runtime.PersistSettings) == "function" then
+                local ok, result = pcall(Runtime.PersistSettings)
+                persistentSaved = ok and result == true
             end
-        end
 
-        if loaderUrlNeedsSave then saveConfig() end
+            local configSaved = false
+            if type(Bridge.saveCycleConfig) == "function" then
+                local ok, result = pcall(Bridge.saveCycleConfig)
+                configSaved = ok and result == true
+            elseif type(Bridge.saveConfig) == "function" then
+                local ok, result = pcall(Bridge.saveConfig, true)
+                configSaved = ok and result == true
+            end
+            return persistentSaved or configSaved
+        end
 
         local function normalizeWorld(value)
             return tostring(value or ""):upper():gsub("[^A-Z0-9]", "")
@@ -23394,7 +26404,7 @@ loadConfig(true)
             if type(saved) ~= "table" then return false end
             for _, key in ipairs({
                 "plant", "farm", "clear", "spam", "splice",
-                "pabrik", "build", "vend", "harvest",
+                "pabrik", "build", "vend", "harvest", "factory",
             }) do
                 if saved[key] == true then return true end
             end
@@ -23418,9 +26428,133 @@ loadConfig(true)
             end
         end
 
-        local function savePending(world, activity)
+        local function isFactoryRunning()
+            return Bridge.Owner and Bridge.Owner.Factory and Bridge.Owner.Factory.Running == true
+        end
+
+        local function fallbackActive()
+            return Reconnect.Fallback == true or isFactoryRunning()
+        end
+
+        Runtime.isFallbackActive = fallbackActive
+
+        -- Pengaturan Auto Reconnect disimpan terpisah dari preset Auto Farm.
+        -- File ini ditulis langsung saat callback UI berubah, sehingga tidak
+        -- bergantung pada antrean task.delay atau Config.CurrentName.
+        do
+            local SETTINGS_FILE = FOLDER .. "/autoreconnect_" ..
+                tostring(USER_ID) .. "_" .. tostring(game.PlaceId) .. ".json"
+
+            local function normalizeStoredSettings()
+                Reconnect.On = Reconnect.On == true
+                Reconnect.Fallback = Reconnect.Fallback == true
+                Reconnect.World = Reconnect.World == true
+                Reconnect.Server = Reconnect.Server == true
+                Reconnect.Keep = Reconnect.Keep == true
+                Reconnect.DelaySec = math.clamp(math.floor(tonumber(Reconnect.DelaySec) or 5), 2, 60)
+                Reconnect.LoaderUrl = normalizeLoaderUrl(Reconnect.LoaderUrl)
+                Reconnect.Target = tostring(Reconnect.Target or "")
+                Reconnect.CycleOn = Reconnect.CycleOn == true
+                Reconnect.CycleFeatures = normalizeCycleFeatures(Reconnect.CycleFeatures)
+                Reconnect.CycleIntervalMode = normalizeCycleInterval(Reconnect.CycleIntervalMode)
+                Reconnect.CycleCustomMinutes = math.clamp(
+                    math.floor(tonumber(Reconnect.CycleCustomMinutes) or 5), 1, 1440
+                )
+                Reconnect.CycleIndex = math.max(1, math.floor(tonumber(Reconnect.CycleIndex) or 1))
+                Reconnect.CycleWorld = tostring(Reconnect.CycleWorld or "")
+            end
+
+            local function writeSettings()
+                if type(writefile) ~= "function" then return false end
+                ensureFolder()
+
+                local settings = {}
+                for _, key in ipairs(CONFIG_KEYS) do
+                    local value = Reconnect[key]
+                    if type(value) == "table" then
+                        local copied = {}
+                        for index, item in ipairs(value) do copied[index] = item end
+                        settings[key] = copied
+                    else
+                        settings[key] = value
+                    end
+                end
+
+                local payload = {
+                    Schema = 1,
+                    UserId = USER_ID,
+                    PlaceId = game.PlaceId,
+                    SavedAt = os.time(),
+                    Settings = settings,
+                }
+
+                local okEncode, encoded = pcall(HttpService.JSONEncode, HttpService, payload)
+                if not okEncode or type(encoded) ~= "string" then return false end
+
+                local okWrite, result = pcall(writefile, SETTINGS_FILE, encoded)
+                return okWrite and result ~= false
+            end
+
+            local function readSettings()
+                if type(isfile) ~= "function" or type(readfile) ~= "function" then
+                    return false
+                end
+
+                local okExists, exists = pcall(isfile, SETTINGS_FILE)
+                if not okExists or not exists then return false end
+
+                local okRead, raw = pcall(readfile, SETTINGS_FILE)
+                if not okRead or type(raw) ~= "string" then return false end
+
+                local okDecode, payload = pcall(HttpService.JSONDecode, HttpService, raw)
+                if not okDecode or type(payload) ~= "table"
+                    or payload.Schema ~= 1
+                    or tonumber(payload.UserId) ~= USER_ID
+                    or tonumber(payload.PlaceId) ~= game.PlaceId
+                    or type(payload.Settings) ~= "table" then
+                    return false
+                end
+
+                local saved = payload.Settings
+                for _, key in ipairs(CONFIG_KEYS) do
+                    local value = saved[key]
+                    local current = Reconnect[key]
+                    if value ~= nil and type(value) == type(current) then
+                        if key == "CycleFeatures" then
+                            Reconnect[key] = normalizeCycleFeatures(value)
+                        else
+                            Reconnect[key] = value
+                        end
+                    end
+                end
+
+                normalizeStoredSettings()
+                return true
+            end
+
+            Runtime.PersistSettings = writeSettings
+
+            -- File khusus menjadi sumber utama untuk Auto Reconnect.
+            -- Jika belum ada, migrasikan nilai yang sudah dibaca dari ByteConfig.
+            local loaded = readSettings()
+            if not loaded then
+                writeSettings()
+            end
+        end
+
+        local storedLoaderUrl = tostring(Reconnect.LoaderUrl or "")
+        Reconnect.LoaderUrl = normalizeLoaderUrl(Reconnect.LoaderUrl)
+        local loaderUrlNeedsSave = storedLoaderUrl ~= Reconnect.LoaderUrl
+        if loaderUrlNeedsSave then saveConfig() end
+
+        local function savePending(world, activity, fallbackRecovery, worldPlaceId)
             world = normalizeWorld(world)
             if world == "" then return false end
+
+            local isLobbyPlace = false
+            pcall(function()
+                isLobbyPlace = game:GetService("ReplicatedStorage"):FindFirstChild("MenuRemotes") ~= nil
+            end)
 
             local payload = {
                 Schema = 1,
@@ -23428,6 +26562,8 @@ loadConfig(true)
                 Activity = type(activity) == "table" and activity or nil,
                 Settings = {
                     On = Reconnect.On == true,
+                    Fallback = Reconnect.Fallback == true,
+                    FallbackRecovery = fallbackRecovery == true,
                     World = Reconnect.World == true,
                     Server = Reconnect.Server == true,
                     Keep = Reconnect.Keep == true,
@@ -23444,7 +26580,9 @@ loadConfig(true)
                     CycleActiveFeature = tostring(Runtime.Cycle.CurrentFeature or ""),
                 },
                 UserId = USER_ID,
+                GameId = game.GameId,
                 PlaceId = game.PlaceId,
+                WorldPlaceId = tonumber(worldPlaceId) or (not isLobbyPlace and game.PlaceId or nil),
                 CreatedAt = os.time(),
             }
 
@@ -23499,9 +26637,15 @@ loadConfig(true)
                 or payload.Schema ~= 1
                 or tonumber(payload.UserId) ~= USER_ID
                 or normalizeWorld(payload.World) == ""
-                or (payload.PlaceId ~= nil and tonumber(payload.PlaceId) ~= game.PlaceId)
                 or os.time() - (tonumber(payload.CreatedAt) or 0) < 0
                 or os.time() - (tonumber(payload.CreatedAt) or 0) > 900 then
+                return nil
+            end
+
+            local curGameId = tonumber(game.GameId) or 0
+            if payload.GameId ~= nil and curGameId ~= 0 then
+                if tonumber(payload.GameId) ~= curGameId then return nil end
+            elseif curGameId == 0 and payload.PlaceId ~= nil and tonumber(payload.PlaceId) ~= game.PlaceId then
                 return nil
             end
 
@@ -23509,11 +26653,17 @@ loadConfig(true)
         end
 
         local function queueLoader()
+            if os.clock() - (Runtime.LastQueueAt or 0) < 5 then
+                return true, "debounced"
+            end
+
             local url = normalizeLoaderUrl(Reconnect.LoaderUrl)
             Reconnect.LoaderUrl = url
 
-            if not url:match("^https://") then
-                return false, "Loader URL harus HTTPS. Gunakan URL GitHub file atau Raw URL."
+            local isRemote = url:match("^https://") ~= nil
+            local isLocal = url:match("^local:") ~= nil or url:match("%.luau?$") ~= nil
+            if not isRemote and not isLocal then
+                return false, "Loader URL harus HTTPS atau path file .lua lokal."
             end
 
             local queueFunction = Env.queue_on_teleport
@@ -23542,57 +26692,91 @@ loadConfig(true)
                     if text:match("^%%s*<") then
                         return false, "Server mengirim HTML, bukan script Lua. Periksa URL Loader."
                     end
+                    if text:match("^%%s*[45]%%d%%d[:%%s]") then
+                        return false, text:sub(1, 120)
+                    end
                     return true, text
                 end
 
-                local ok, result = pcall(function()
-                    return game:HttpGet(loaderUrl)
-                end)
-                if ok then
-                    local valid, value = validLua(result)
-                    if valid then
-                        source = value
-                    else
-                        lastError = value
+                local function tryLocalFile(path)
+                    if type(path) ~= "string" or path == "" then return nil end
+                    if type(isfile) == "function" and type(readfile) == "function" then
+                        local okEx, exists = pcall(isfile, path)
+                        if okEx and exists then
+                            local okRd, content = pcall(readfile, path)
+                            if okRd then
+                                local valid, value = validLua(content)
+                                if valid then return value end
+                                lastError = value
+                            end
+                        end
                     end
-                else
-                    lastError = tostring(result)
+                    return nil
+                end
+
+                if loaderUrl:match("^local:") then
+                    source = tryLocalFile(loaderUrl:sub(7))
+                elseif loaderUrl:match("%%.luau?$") and not loaderUrl:match("^https?://") then
+                    source = tryLocalFile(loaderUrl)
+                end
+
+                if not source and loaderUrl:match("^https://") then
+                    local ok, result = pcall(function()
+                        return game:HttpGet(loaderUrl)
+                    end)
+                    if ok then
+                        local valid, value = validLua(result)
+                        if valid then
+                            source = value
+                        else
+                            lastError = value
+                        end
+                    else
+                        lastError = tostring(result)
+                    end
+
+                    if not source then
+                        local env = _G
+                        if type(getgenv) == "function" then
+                            local envOk, envValue = pcall(getgenv)
+                            if envOk and type(envValue) == "table" then env = envValue end
+                        end
+
+                        local requestApi = env.request
+                            or env.http_request
+                            or (env.syn and env.syn.request)
+                            or (env.http and env.http.request)
+
+                        if type(requestApi) == "function" then
+                            local sent, response = pcall(requestApi, {
+                                Url = loaderUrl,
+                                Method = "GET",
+                            })
+
+                            if sent and type(response) == "table" then
+                                local status = tonumber(response.StatusCode or response.Status)
+                                local body = response.Body or response.body
+                                if status and (status < 200 or status >= 300) then
+                                    lastError = "HTTP " .. tostring(status)
+                                else
+                                    local valid, value = validLua(body)
+                                    if valid then
+                                        source = value
+                                    else
+                                        lastError = value
+                                    end
+                                end
+                            else
+                                lastError = tostring(response)
+                            end
+                        end
+                    end
                 end
 
                 if not source then
-                    local env = _G
-                    if type(getgenv) == "function" then
-                        local envOk, envValue = pcall(getgenv)
-                        if envOk and type(envValue) == "table" then env = envValue end
-                    end
-
-                    local requestApi = env.request
-                        or env.http_request
-                        or (env.syn and env.syn.request)
-                        or (env.http and env.http.request)
-
-                    if type(requestApi) == "function" then
-                        local sent, response = pcall(requestApi, {
-                            Url = loaderUrl,
-                            Method = "GET",
-                        })
-
-                        if sent and type(response) == "table" then
-                            local status = tonumber(response.StatusCode or response.Status)
-                            local body = response.Body or response.body
-                            if status and (status < 200 or status >= 300) then
-                                lastError = "HTTP " .. tostring(status)
-                            else
-                                local valid, value = validLua(body)
-                                if valid then
-                                    source = value
-                                else
-                                    lastError = value
-                                end
-                            end
-                        else
-                            lastError = tostring(response)
-                        end
+                    for _, localPath in ipairs({ "ByteHub/local_loader.lua", "NewUI_Second_95.lua" }) do
+                        source = tryLocalFile(localPath)
+                        if source then break end
                     end
                 end
 
@@ -23624,8 +26808,14 @@ loadConfig(true)
             local ok, result = pcall(queueFunction, queuedSource)
             if not ok then return false, result end
             if result == false then return false, "Executor menolak antrean loader." end
+            Runtime.LastQueueAt = os.clock()
             saveConfig()
             return true, result
+        end
+
+        Runtime.queueLoader = queueLoader
+        Runtime.getLoaderUrl = function()
+            return normalizeLoaderUrl(Reconnect.LoaderUrl)
         end
 
         local function waitForWorld(world, timeout)
@@ -23673,12 +26863,27 @@ loadConfig(true)
             world = normalizeWorld(world)
             if world == "" then return false, "World tujuan kosong." end
 
-            for attempt = 1, 3 do
+            local inLobbyPlace = false
+            pcall(function()
+                inLobbyPlace = game:GetService("ReplicatedStorage"):FindFirstChild("MenuRemotes") ~= nil
+            end)
+            if not inLobbyPlace then
+                local waitReadyEnd = os.clock() + 15
+                while active() and os.clock() < waitReadyEnd do
+                    local gameReady = Player and Player:GetAttribute("GameReady") == true
+                    local enterReady = type(Bridge.isEnterReady) ~= "function" or Bridge.isEnterReady()
+                    if gameReady and enterReady then break end
+                    setStatus("Menunggu menu world siap sebelum masuk " .. world .. "...")
+                    task.wait(0.4)
+                end
+            end
+
+            for attempt = 1, 5 do
                 if not active() then return false, "Modul dihentikan." end
 
                 local ok, err, hopping = Bridge.enterWorld(world)
                 if hopping == true then
-                    savePending(world, saved)
+                    savePending(world, saved, fallbackActive())
                     local queued, queueError = queueLoader()
                     setStatus("Transfer ke " .. world .. (queued and " sedang berjalan." or ". " .. tostring(queueError)))
                     return true, "hopping"
@@ -23690,7 +26895,7 @@ loadConfig(true)
                     err = resumeError
                 end
 
-                setStatus(("Gagal masuk %s (%d/3): %s"):format(world, attempt, tostring(err)))
+                setStatus(("Gagal masuk %s (%d/5): %s"):format(world, attempt, tostring(err)))
                 task.wait(math.max(2, Reconnect.DelaySec))
             end
 
@@ -23724,6 +26929,7 @@ loadConfig(true)
             if feature == "Auto PnB" then return "farm" end
             if feature == "Auto Plant" then return "plant" end
             if feature == "Auto Harvest" then return "harvest" end
+            if feature == "Factory" then return "factory" end
             return nil
         end
 
@@ -23826,6 +27032,7 @@ loadConfig(true)
                 plant = false,
                 farm = false,
                 harvest = false,
+                factory = false,
                 plantSeedId = base.plantSeedId,
                 pnbX = tonumber(base.pnbX),
                 pnbY = tonumber(base.pnbY),
@@ -23851,6 +27058,8 @@ loadConfig(true)
                 snapshot.tx, snapshot.ty = x, y
             elseif feature == "Auto Harvest" then
                 snapshot.harvest = true
+            elseif feature == "Factory" then
+                snapshot.factory = true
             end
 
             return snapshot
@@ -24101,7 +27310,10 @@ loadConfig(true)
 
         local function onWorldClosed(message)
             local cycleTracking = Runtime.Cycle.isTracking()
-            if not active() or not ((Reconnect.On and Reconnect.World) or cycleTracking)
+            if Bridge.Owner and Bridge.Owner.Factory and Bridge.Owner.Factory.Rotating then
+                return
+            end
+            if not active() or not ((Reconnect.On and Reconnect.World) or cycleTracking or fallbackActive())
                 or Reconnect.Busy or Reconnect.Disconnecting then
                 return
             end
@@ -24124,7 +27336,7 @@ loadConfig(true)
 
                 task.wait(math.max(1, tonumber(Reconnect.DelaySec) or 5))
 
-                if not active() or not (Reconnect.On or (Reconnect.CycleOn and cycleFeature ~= nil)) then
+                if not active() or not (Reconnect.On or (Reconnect.CycleOn and cycleFeature ~= nil) or fallbackActive()) then
                     Reconnect.Busy = false
                     Runtime.Cycle.Transitioning = false
                     return
@@ -24154,7 +27366,7 @@ loadConfig(true)
         end
 
         local function onServerDisconnect(message)
-            if not active() or not ((Reconnect.On and Reconnect.Server) or Runtime.Cycle.isTracking())
+            if not active() or not ((Reconnect.On and Reconnect.Server) or Runtime.Cycle.isTracking() or fallbackActive())
                 or Reconnect.Disconnecting then
                 return
             end
@@ -24164,7 +27376,7 @@ loadConfig(true)
             local world = normalizeWorld((saved and saved.world) or targetWorld())
 
             if world ~= "" then
-                savePending(world, saved)
+                savePending(world, saved, fallbackActive())
             end
 
             if saved and Bridge.hasActivity() then
@@ -24237,11 +27449,29 @@ loadConfig(true)
                         if state == Enum.TeleportState.Started
                             or state == Enum.TeleportState.InProgress
                             or state == Enum.TeleportState.WaitingForServer then
+                            if fallbackActive() or (Reconnect.On and Reconnect.Server) or Runtime.Cycle.isTracking() then
+                                if not readPending() then
+                                    local snap = getCurrentSnapshot()
+                                    local wName = normalizeWorld((snap and snap.world) or targetWorld())
+                                    if wName ~= "" then
+                                        savePending(wName, snap, fallbackActive())
+                                    end
+                                end
+                            end
                             queueLoader()
                         end
                     end))
                 end)
             end
+
+            pcall(function()
+                addConnection(TeleportService.TeleportInitFailed:Connect(function(failedPlayer, teleportResult, errorMessage)
+                    if failedPlayer == Player and active() and not Reconnect.Disconnecting
+                        and ((Reconnect.On and Reconnect.Server) or Runtime.Cycle.isTracking() or fallbackActive()) then
+                        onServerDisconnect("Teleport gagal: " .. tostring(errorMessage or teleportResult or ""))
+                    end
+                end))
+            end)
         end
 
         local function reconnectNow()
@@ -24284,6 +27514,17 @@ loadConfig(true)
                     end
                     saveConfig()
                     setStatus(Reconnect.On and "Aktif" or "Nonaktif")
+                end,
+            })
+
+            Runtime.Controls.Fallback = tab:Toggle({
+                Title = "Auto Reconnect Fallback",
+                Desc = "Otomatis rejoin world & lanjutkan Factory/aktivitas saat ke-kick dari world atau server.",
+                Value = Reconnect.Fallback == true,
+                Callback = function(value)
+                    Reconnect.Fallback = value == true
+                    saveConfig()
+                    setStatus(Reconnect.Fallback and "Fallback aktif" or "Fallback nonaktif")
                 end,
             })
 
@@ -24461,6 +27702,20 @@ loadConfig(true)
                 Callback = reconnectNow,
             })
 
+            tab:Button({
+                Title = "Kick Diri Sendiri",
+                Desc = "Kick penuh dari server Roblox (ErrorPrompt) untuk menguji Auto Reconnect Fallback.",
+                ButtonText = "Kick",
+                Callback = function()
+                    local lp = Player or game:GetService("Players").LocalPlayer
+                    if lp and type(lp.Kick) == "function" then
+                        pcall(function()
+                            lp:Kick("Self kick (ByteHub)")
+                        end)
+                    end
+                end,
+            })
+
             tab:Section({ Title = "INFORMATION" })
             if Bridge.StatusLabel and type(Bridge.StatusLabel.Set) == "function" then
                 setStatus("Siap. Auto Reconnect nonaktif.")
@@ -24506,6 +27761,8 @@ loadConfig(true)
 
         function Runtime.Shutdown()
             if not Runtime.Active then return end
+            -- Flush current Auto Reconnect settings before UI/session teardown.
+            pcall(saveConfig)
             Runtime.Active = false
             for _, connection in ipairs(Runtime.Connections) do
                 pcall(function() connection:Disconnect() end)
@@ -24519,12 +27776,53 @@ loadConfig(true)
             end
         end
 
+        local function hasActiveFactoryRotationPending()
+            local payload
+            local rotFile = FOLDER .. "/factory_rotation_" .. tostring(USER_ID) .. ".json"
+            if type(isfile) == "function" and type(readfile) == "function" then
+                local okEx, exists = pcall(isfile, rotFile)
+                if okEx and exists then
+                    local okRd, raw = pcall(readfile, rotFile)
+                    if okRd and type(raw) == "string" then
+                        local okDec, dec = pcall(HttpService.JSONDecode, HttpService, raw)
+                        if okDec and type(dec) == "table" then payload = dec end
+                    end
+                end
+            end
+            if not payload then
+                local okT, data = pcall(function()
+                    return TeleportService:GetTeleportSetting("ByteHub.FactoryRotation.v1")
+                end)
+                if okT and type(data) == "table" then payload = data end
+            end
+            if type(payload) ~= "table"
+                or payload.Schema ~= 1
+                or tonumber(payload.UserId) ~= USER_ID
+                or normalizeWorld(payload.TargetWorld) == ""
+                or os.time() - (tonumber(payload.CreatedAt) or 0) < 0
+                or os.time() - (tonumber(payload.CreatedAt) or 0) > 900 then
+                return false
+            end
+            local curGameId = tonumber(game.GameId) or 0
+            if payload.GameId ~= nil and curGameId ~= 0 then
+                if tonumber(payload.GameId) ~= curGameId then return false end
+            elseif curGameId == 0 and payload.PlaceId ~= nil and tonumber(payload.PlaceId) ~= game.PlaceId then
+                return false
+            end
+            return true
+        end
+
         task.spawn(function()
             local pending = readPending()
+            if hasActiveFactoryRotationPending() then
+                if pending then clearPending() end
+                pending = nil
+            end
 
             if pending and type(pending.Settings) == "table" then
                 local settings = pending.Settings
                 if settings.On ~= nil then Reconnect.On = settings.On == true end
+                if settings.Fallback ~= nil then Reconnect.Fallback = settings.Fallback == true end
                 if settings.World ~= nil then Reconnect.World = settings.World == true end
                 if settings.Server ~= nil then Reconnect.Server = settings.Server == true end
                 if settings.Keep ~= nil then Reconnect.Keep = settings.Keep == true end
@@ -24554,6 +27852,7 @@ loadConfig(true)
 
                 local controls = Runtime.Controls or {}
                 if controls.Master and controls.Master.Set then controls.Master:Set(Reconnect.On) end
+                if controls.Fallback and controls.Fallback.Set then controls.Fallback:Set(Reconnect.Fallback == true) end
                 if controls.World and controls.World.Set then controls.World:Set(Reconnect.World) end
                 if controls.Server and controls.Server.Set then controls.Server:Set(Reconnect.Server) end
                 if controls.Keep and controls.Keep.Set then controls.Keep:Set(Reconnect.Keep) end
@@ -24566,26 +27865,89 @@ loadConfig(true)
                 if controls.CycleCustomMinutes and controls.CycleCustomMinutes.Set then
                     controls.CycleCustomMinutes:Set(tostring(Reconnect.CycleCustomMinutes))
                 end
+                saveConfig()
+            end
+
+            local initialWorld = normalizeWorld(Bridge.getWorld())
+            if initialWorld ~= "" then
+                Reconnect.LastWorld = initialWorld
+            end
+            if pending then
+                local pWorld = normalizeWorld(pending.World)
+                if pWorld ~= "" then
+                    Reconnect.LastWorld = pWorld
+                    Reconnect.Last = pending.Activity
+                    Reconnect.LastAt = os.clock()
+                end
             end
 
             local pendingHopping = false
-            if pending and (Reconnect.On or Reconnect.CycleOn) and active() then
+            local fallbackPending = pending and type(pending.Settings) == "table" and pending.Settings.FallbackRecovery == true
+            if pending and (Reconnect.On or Reconnect.CycleOn or Reconnect.Fallback or fallbackPending) and active() then
                 Reconnect.Busy = true
                 local world = normalizeWorld(pending.World)
                 local saved = pending.Activity
 
                 setStatus("Menyiapkan pemulihan ke " .. world .. "...")
                 local current = normalizeWorld(Bridge.getWorld())
+                local inLobbyPlace = false
+                pcall(function()
+                    inLobbyPlace = game:GetService("ReplicatedStorage"):FindFirstChild("MenuRemotes") ~= nil
+                end)
 
                 if current == world then
-                    resumeSaved(world, saved, "Server recovery")
+                    resumeSaved(world, saved, fallbackPending and "Fallback recovery" or "Server recovery")
+                elseif inLobbyPlace then
+                    local targetPid = tonumber(pending.WorldPlaceId or pending.PlaceId)
+                    savePending(world, saved, fallbackPending or fallbackActive(), targetPid)
+                    queueLoader()
+                    setStatus("Di Lobby: masuk kembali ke server world untuk " .. world .. "...")
+                    local hopped = false
+                    pcall(function()
+                        local pg = Player and Player:FindFirstChildOfClass("PlayerGui")
+                        if pg then
+                            for _, obj in ipairs(pg:GetDescendants()) do
+                                if obj:IsA("TextButton") and obj.Visible then
+                                    local txt = tostring(obj.Text or ""):lower()
+                                    if txt == "play" or txt == "start" or txt == "masuk" then
+                                        if type(firesignal) == "function" then
+                                            pcall(firesignal, obj.MouseButton1Click)
+                                            pcall(firesignal, obj.Activated)
+                                            hopped = true
+                                            break
+                                        elseif type(getconnections) == "function" then
+                                            for _, conn in ipairs(getconnections(obj.MouseButton1Click)) do
+                                                pcall(function() conn:Fire() end)
+                                                hopped = true
+                                            end
+                                            for _, conn in ipairs(getconnections(obj.Activated)) do
+                                                pcall(function() conn:Fire() end)
+                                                hopped = true
+                                            end
+                                            if hopped then break end
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end)
+                    if not hopped and targetPid and targetPid ~= game.PlaceId then
+                        pcall(function()
+                            if Player then
+                                TeleportService:Teleport(targetPid, Player)
+                            else
+                                TeleportService:Teleport(targetPid)
+                            end
+                        end)
+                    end
+                    pendingHopping = true
                 else
-                    local entered, detail = enterAndResume(world, saved, "Server recovery")
+                    local entered, detail = enterAndResume(world, saved, fallbackPending and "Fallback recovery" or "Server recovery")
                     pendingHopping = entered == true and detail == "hopping"
                 end
 
                 Reconnect.Busy = false
-            elseif pending and not Reconnect.On and not Reconnect.CycleOn then
+            elseif pending and not Reconnect.On and not Reconnect.CycleOn and not Reconnect.Fallback and not fallbackPending then
                 clearPending()
             end
 
@@ -24608,26 +27970,37 @@ loadConfig(true)
                         Reconnect.Last = snapshot
                         Reconnect.LastAt = os.clock()
                     end
-                elseif Reconnect.LastAt > 0 and os.clock() - Reconnect.LastAt > 3 then
+                elseif Reconnect.LastAt > 0 and os.clock() - Reconnect.LastAt > (currentWorld == "" and 30 or 3) then
                     Reconnect.Last = nil
                     Reconnect.LastAt = 0
                 end
 
-                if Reconnect.On and Reconnect.Keep and not Reconnect.Busy
-                    and not Reconnect.Disconnecting and currentWorld == "" then
+                local rotatingFactory = Bridge.Owner and Bridge.Owner.Factory and Bridge.Owner.Factory.Rotating == true
+                local isLobbyNow = false
+                pcall(function()
+                    isLobbyNow = game:GetService("ReplicatedStorage"):FindFirstChild("MenuRemotes") ~= nil
+                end)
+                local guardModeLoop = type(Bridge.getGuardMode) == "function" and Bridge.getGuardMode() or "idle"
+                local allowSilentReturn = (Reconnect.On and Reconnect.Keep) or (fallbackActive() and Reconnect.LastWorld ~= "")
+                if not rotatingFactory and not isLobbyNow and allowSilentReturn and not Reconnect.Busy
+                    and not Reconnect.Disconnecting and currentWorld == ""
+                    and guardModeLoop ~= "away" and guardModeLoop ~= "out" then
                     outsideSince = outsideSince or os.clock()
                     local world = targetWorld()
-                    if world ~= "" and os.clock() - outsideSince >= math.max(8, Reconnect.DelaySec) then
+                    local waitSec = (Reconnect.On and Reconnect.Keep) and math.max(8, Reconnect.DelaySec)
+                        or math.max(4, Reconnect.DelaySec)
+                    local reasonText = (Reconnect.On and Reconnect.Keep) and "Auto return" or "Fallback rejoin"
+                    if world ~= "" and os.clock() - outsideSince >= waitSec then
                         outsideSince = nil
                         Reconnect.Busy = true
-                        enterAndResume(world, Reconnect.Last, "Auto return")
+                        enterAndResume(world, Reconnect.Last, reasonText)
                         Reconnect.Busy = false
                     end
                 else
                     outsideSince = nil
                 end
 
-                if Reconnect.CycleOn and not Runtime.Cycle.Transitioning then
+                if Reconnect.CycleOn and not Runtime.Cycle.Transitioning and not rotatingFactory then
                     local guardMode = type(Bridge.getGuardMode) == "function" and Bridge.getGuardMode() or "idle"
                     local guardPaused = guardMode == "away" or guardMode == "out"
                         or guardMode == "pause" or guardMode == "back"
